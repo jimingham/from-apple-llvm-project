@@ -1322,6 +1322,103 @@ CompilerType SwiftLanguageRuntimeImpl::GetChildCompilerTypeAtIndex(
   return {};
 }
 
+bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(
+    ValueObject &valobj, 
+    SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info,
+    Status &error) {
+  CompilerType enum_type = valobj.GetCompilerType();
+  if (!enum_type) {
+    error.SetErrorStringWithFormatv("Invalid type for valobj: {0}", 
+                                    valobj.GetName());
+    return false;
+  }
+  auto *type_system = llvm::dyn_cast_or_null<TypeSystemSwiftTypeRef>(
+      enum_type.GetTypeSystem());
+  if (!type_system) {
+    error.SetErrorStringWithFormatv("Could not get TypeRef typesystem for {0}",
+                                    valobj.GetName());
+    return false;
+  }
+  
+  auto *reflection_ctx = GetReflectionContext();
+  if (!reflection_ctx) {
+    error.SetErrorStringWithFormatv("Could not get reflection context for {0}",
+                                    valobj.GetName());
+    return false;
+  }
+
+  StackFrame *frame = valobj.GetExecutionContextRef().GetFrameSP().get();
+  auto *type_info = GetTypeInfo(enum_type, frame);
+  if (type_info->getKind() == swift::reflection::TypeInfoKind::Invalid) {
+    error.SetErrorStringWithFormatv("Did not get a valid TypeInfo for {0}",
+                                    valobj.GetName());
+    return false;
+  }
+  auto enum_type_info 
+      = llvm::dyn_cast_or_null<swift::reflection::EnumTypeInfo>(type_info);
+  if (!enum_type_info) {
+    error.SetErrorStringWithFormatv("Called GetCurrentEnumValue on a value "
+                                    "that wasn't an enum: {0}", 
+                                    valobj.GetName());
+    return false;
+  }
+  
+  enum_info.is_optional = enum_type_info->isOptional();
+
+  int case_idx;
+  AddressType addr_type;
+  lldb::addr_t addr = valobj.GetAddressOf(true, &addr_type);
+
+  if (addr_type == eAddressTypeFile) {
+    error.SetErrorStringWithFormatv("Can't get current enum value for {0}:"
+                                    " its a file address", valobj.GetName());
+    return false;
+  }
+  
+  if (addr_type == eAddressTypeHost) {
+    // If we're holding the buffer locally, then we should push the address
+    // of our local buffer for the memory reader to use.
+    // This is a little dubious, since we're pushing a local buffer, but we
+    // might overlay some metadata, in which case this will fail mysteriously.
+    Status tmp_error;
+    unsigned enum_size = enum_type_info->getSize();
+    // FIXME: I think AddressOf should return this address...
+    DataExtractor data;
+    uint64_t buffer_size = valobj.GetData(data, tmp_error);
+    if (!tmp_error.Success() || buffer_size < enum_size) {
+      error.SetErrorStringWithFormatv("Could not get data from valobj {}.",
+                                      valobj.GetName());
+      return false;
+    }
+    lldb::offset_t offset = 0;
+    addr = (lldb::addr_t) data.GetData(&offset, enum_size);
+    PushLocalBuffer(addr, enum_size);
+  }
+  bool success 
+      = enum_type_info->projectEnumValue(reflection_ctx->getReader(),
+                                         swift::reflection::RemoteAddress(addr), 
+                                         &case_idx);
+  if (addr_type == eAddressTypeHost)
+    PopLocalBuffer();
+
+  if (!success) {
+    error.SetErrorStringWithFormatv("projectEnumValue failed using address: {0}"
+                                    " for {1}", addr, valobj.GetName());
+    return false;
+  }
+  swift::reflection::FieldInfo current_case 
+      = enum_type_info->getCases()[case_idx];
+  enum_info.case_name = current_case.Name;
+  enum_info.case_offset = current_case.Offset;
+  enum_info.case_length = current_case.TI.getSize();
+  enum_info.has_payload = current_case.TR != 0;
+  if (enum_info.has_payload)
+    enum_info.case_type = GetTypeFromTypeRef(*type_system, current_case.TR);
+  
+  return true;                                                   
+}
+
+
 bool SwiftLanguageRuntimeImpl::ForEachSuperClassType(
     ValueObject &instance, std::function<bool(SuperClassType)> fn) {
   auto *reflection_ctx = GetReflectionContext();

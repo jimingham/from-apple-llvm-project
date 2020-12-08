@@ -1555,6 +1555,7 @@ addr_t ValueObject::GetAddressOf(bool scalar_is_load_address,
   case Value::eValueTypeHostAddress: {
     if (address_type)
       *address_type = m_value.GetValueAddressType();
+    // FIXME - Shouldn't this return the address of the local DataExtractor buffer?
     return LLDB_INVALID_ADDRESS;
   } break;
   }

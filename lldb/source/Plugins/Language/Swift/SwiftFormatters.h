@@ -27,7 +27,6 @@
 #include "SwiftDictionary.h"
 #include "SwiftMetatype.h"
 #include "SwiftOptionSet.h"
-#include "SwiftOptional.h"
 #include "SwiftSet.h"
 #include "SwiftUnsafeTypes.h"
 
@@ -107,9 +106,7 @@ bool ObjC_Selector_SummaryProvider(ValueObject &valobj, Stream &stream,
 
 bool TypePreservingNSNumber_SummaryProvider(ValueObject &valobj, Stream &stream,
                                             const TypeSummaryOptions &options);
-
-SyntheticChildrenFrontEnd *EnumSyntheticFrontEndCreator(CXXSyntheticChildren *,
-                                                        lldb::ValueObjectSP);
+                                                        
 }
 }
 }

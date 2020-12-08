@@ -269,6 +269,14 @@ public:
     return {};
   }
 
+  bool GetCurrentEnumValue(ValueObject &valobj, 
+                           SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info,
+                           Status &error) {
+    STUB_LOG();
+    error.SetErrorString("GetCurrentEnumValue unimplemented in stub runtime");
+    return false;
+  }
+
   bool GetObjectDescription(Stream &str, ValueObject &object) {
     STUB_LOG();
     return false;
@@ -2158,6 +2166,13 @@ CompilerType SwiftLanguageRuntime::GetChildCompilerTypeAtIndex(
           child_bitfield_bit_size, child_bitfield_bit_offset,
           child_is_base_class, child_is_deref_of_parent, valobj,
           language_flags);
+}
+
+bool SwiftLanguageRuntime::GetCurrentEnumValue(
+    ValueObject &valobj,
+    SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info,
+    Status &error) {
+  FORWARD(GetCurrentEnumValue, valobj, enum_info, error);                                               
 }
 
 bool SwiftLanguageRuntime::GetObjectDescription(Stream &str,
