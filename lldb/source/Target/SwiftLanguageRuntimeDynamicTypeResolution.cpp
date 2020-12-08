@@ -1086,9 +1086,18 @@ GetTypeFromTypeRef(TypeSystemSwiftTypeRef &ts,
                    const swift::reflection::TypeRef *type_ref) {
   if (!type_ref)
     return {};
+
   swift::Demangle::Demangler dem;
   swift::Demangle::NodePointer node = type_ref->getDemangling(dem);
-  return ts.RemangleAsType(dem, node);
+  auto *ts_typeref = llvm::dyn_cast_or_null<TypeSystemSwiftTypeRef>(&ts);
+  if (ts_typeref)
+    return ts_typeref->RemangleAsType(dem, node);
+  auto *ast_type_system = llvm::dyn_cast_or_null<SwiftASTContext>(&ts);
+  if (ast_type_system) {
+      return ast_type_system->GetTypeRefTypeSystem()->RemangleAsType(dem, node);
+  }
+  // If this isn't a Swift typesystem we aren't going to be able to get a type.
+  return {};
 }
 
 CompilerType SwiftLanguageRuntimeImpl::GetChildCompilerTypeAtIndex(
@@ -1332,14 +1341,7 @@ bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(
                                     valobj.GetName());
     return false;
   }
-  auto *type_system = llvm::dyn_cast_or_null<TypeSystemSwiftTypeRef>(
-      enum_type.GetTypeSystem());
-  if (!type_system) {
-    error.SetErrorStringWithFormatv("Could not get TypeRef typesystem for {0}",
-                                    valobj.GetName());
-    return false;
-  }
-  
+
   auto *reflection_ctx = GetReflectionContext();
   if (!reflection_ctx) {
     error.SetErrorStringWithFormatv("Could not get reflection context for {0}",
@@ -1347,9 +1349,11 @@ bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(
     return false;
   }
 
-  StackFrame *frame = valobj.GetExecutionContextRef().GetFrameSP().get();
-  auto *type_info = GetTypeInfo(enum_type, frame);
-  if (type_info->getKind() == swift::reflection::TypeInfoKind::Invalid) {
+  ExecutionContextScope *scope 
+    = valobj.GetExecutionContextRef().Lock(true).GetBestExecutionContextScope();
+  auto *type_info = GetTypeInfo(enum_type, scope);
+  if (!type_info ||
+      type_info->getKind() == swift::reflection::TypeInfoKind::Invalid) {
     error.SetErrorStringWithFormatv("Did not get a valid TypeInfo for {0}",
                                     valobj.GetName());
     return false;
@@ -1412,9 +1416,19 @@ bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(
   enum_info.case_offset = current_case.Offset;
   enum_info.case_length = current_case.TI.getSize();
   enum_info.has_payload = current_case.TR != 0;
-  if (enum_info.has_payload)
-    enum_info.case_type = GetTypeFromTypeRef(*type_system, current_case.TR);
-  
+  if (enum_info.has_payload) {
+    CompilerType case_type = GetTypeFromTypeRef(*enum_type.GetTypeSystem(), 
+                                             current_case.TR);
+    if (case_type.IsValid()) {
+      enum_info.case_type = case_type;
+      return true;
+    } else {
+      error.SetErrorStringWithFormatv("projectEnumValue failed to get a "
+                                      "CompilerType for case {0} from {1}",
+                                      enum_info.case_name, valobj.GetName());
+      return false;
+    }
+  }
   return true;                                                   
 }
 

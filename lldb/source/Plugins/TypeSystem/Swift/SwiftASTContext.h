@@ -760,6 +760,10 @@ public:
           &modules,
       Status &error);
 
+  TypeSystemSwiftTypeRef *GetTypeRefTypeSystem() {
+    return &m_typeref_typesystem;
+  }
+
 protected:
   /// This map uses the string value of ConstStrings as the key, and the
   /// TypeBase

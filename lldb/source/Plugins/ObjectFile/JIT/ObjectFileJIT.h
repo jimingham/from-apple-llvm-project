@@ -90,6 +90,9 @@ public:
   lldb_private::Address GetEntryPointAddress() override;
 
   lldb_private::Address GetBaseAddress() override;
+  
+  llvm::StringRef GetReflectionSectionIdentifier(
+    swift::ReflectionSectionKind section) override;
 
   ObjectFile::Type CalculateType() override;
 

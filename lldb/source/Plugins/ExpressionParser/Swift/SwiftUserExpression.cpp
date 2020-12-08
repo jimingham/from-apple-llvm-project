@@ -464,11 +464,22 @@ bool SwiftUserExpression::Parse(DiagnosticManager &diagnostic_manager,
     }
   }
 
-  if (m_options.GetGenerateDebugInfo()) {
+  // Even if we aren't generating Debug info, we still need to register this
+  // JIT module with the runtime.  It might have made classes we need to register
+  // with the ReflectionContext or we won't be able to ask Reflection about it
+  // later on.  But for now, let's only do this for the REPL:
+  if (m_options.GetGenerateDebugInfo() || m_options.GetREPLEnabled()) {
     StreamString jit_module_name;
     jit_module_name.Printf("%s%u", FunctionName(),
                            m_options.GetExpressionNumber());
     m_execution_unit_sp->CreateJITModule(jit_module_name.GetString().data());
+    LanguageRuntime *runtime 
+        = process->GetLanguageRuntime(lldb::eLanguageTypeSwift);
+    if (runtime) {
+      ModuleList m_list;
+      m_list.Append(m_execution_unit_sp->GetJITModule(), false);
+      runtime->ModulesDidLoad(m_list);
+    }
   }
 
   if (jit_error.Success()) {
