@@ -27,17 +27,17 @@ class EnumSyntheticFrontEnd : public SyntheticChildrenFrontEnd {
 public:
   EnumSyntheticFrontEnd(lldb::ValueObjectSP valobj_sp);
 
-  virtual size_t CalculateNumChildren();
+  size_t CalculateNumChildren() override;
 
-  virtual lldb::ValueObjectSP GetChildAtIndex(size_t idx);
+  lldb::ValueObjectSP GetChildAtIndex(size_t idx) override;
 
-  virtual bool Update();
+  bool Update() override;
 
-  virtual bool MightHaveChildren();
+  bool MightHaveChildren() override;
 
-  virtual size_t GetIndexOfChildWithName(ConstString name);
+  size_t GetIndexOfChildWithName(ConstString name) override;
   
-  virtual lldb::ValueObjectSP GetSyntheticValue();
+  lldb::ValueObjectSP GetSyntheticValue() override;
 
   virtual ~EnumSyntheticFrontEnd() = default;
 
@@ -48,11 +48,9 @@ private:
   lldb::addr_t m_element_offset;
   lldb::addr_t m_element_length;
   bool m_is_optional;
-  bool m_is_none;
   bool m_has_payload;
   bool m_is_valid;
   lldb::ValueObjectSP m_current_value_sp;
-  size_t m_child_index; // FIXME: Do I actually need this?
 };
 
 SyntheticChildrenFrontEnd *EnumSyntheticFrontEndCreator(CXXSyntheticChildren *,

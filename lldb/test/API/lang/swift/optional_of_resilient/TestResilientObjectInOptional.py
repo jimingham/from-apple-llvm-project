@@ -22,6 +22,8 @@ class TestResilientObjectInOptional(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
+    NO_DEBUG_INFO_TESTCASE = True
+
     #@skipUnlessDarwin
     #@swiftTest
     def test_optional_of_resilient(self):
@@ -51,27 +53,26 @@ class TestResilientObjectInOptional(TestBase):
         # First try getting a non-resiliant optional, to make sure that
         # part isn't broken:
         t_opt_var = frame.FindVariable("t_opt")
-        self.assertTrue(t_opt_var.GetError().Success(), "Made t_opt value object")
+        lldbutil.check_variable(self, t_opt_var, num_children=1)
         t_a_var = t_opt_var.GetChildMemberWithName("a")
-        self.assertTrue(t_a_var.GetError().Success(), "The child was a")
-        lldbutil.check_variable(self, t_a_var, False, value="2")
+        lldbutil.check_variable(self, t_a_var, value="2", summary="")
         
         # Try a normal enum with this resilient element.
-        opt_var = frame.FindVariable("r_enum_s")
-        self.assertTrue(opt_var.GetError().Success(), "Made r_enum_s value object")
-        s_var = opt_var.GetChildMemberWithName("s")
-        self.assertTrue(s_var.GetError().Success(), "The resilient child was 'a'")
-        lldbutil.check_variable(self, s_var, False, value="1")
+        enum_var = frame.FindVariable("r_enum_s")
+        # The summary is the name of the projected case, which should be "s" here:
+        lldbutil.check_variable(self, enum_var, summary="s", num_children=5)
+
+        # The children are just the projected value, so:
+        enum_var_a = enum_var.GetChildMemberWithName("a")
+        lldbutil.check_variable(self, enum_var_a, value="1")
 
         # Make sure we can print an optional of a resiliant type...
-        # If we got the value out of the optional correctly, then
-        # it's child will be "a".
-        # First do this with "frame var":
-        opt_var = frame.FindVariable("s_opt")
-        self.assertTrue(opt_var.GetError().Success(), "Made s_opt value object")
-        a_var = opt_var.GetChildMemberWithName("a")
-        self.assertTrue(a_var.GetError().Success(), "The resilient child was 'a'")
-        lldbutil.check_variable(self, a_var, False, value="1")
+        # If we got the value out of the optional correctly, its children will be the
+        # projected value:
+        s_opt_var = frame.FindVariable("s_opt")
+        lldbutil.check_variable(self, s_opt_var, num_children=5) 
+        s_a_var = s_opt_var.GetChildMemberWithName("a")
+        lldbutil.check_variable(self, s_a_var, value="1")
         
 if __name__ == '__main__':
     import atexit

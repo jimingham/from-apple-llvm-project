@@ -292,16 +292,25 @@ public:
       } else {
         *result = 0;
       }
-      break;
+      return true;
     }
     case DLQ_GetPointerSize: {
-      auto result = static_cast<uint8_t *>(outBuffer);
+      auto *result = static_cast<uint8_t *>(outBuffer);
       *result = m_process.GetAddressByteSize();
       return true;
     }
     case DLQ_GetSizeSize: {
-      auto result = static_cast<uint8_t *>(outBuffer);
+      auto *result = static_cast<uint8_t *>(outBuffer);
       *result = m_process.GetAddressByteSize(); // FIXME: sizeof(size_t)
+      return true;
+    }
+    case DLQ_GetLeastValidPointerValue: {
+      // FIXME: The comment in MemoryReader.h on this define says the value is
+      // Ox1000 except on MacOS where it should be 0x10000000.  Seems weird that
+      // swift has to ask us then, but for now I'm just returning what the 
+      // comment says we should for macOS.
+      auto *result = static_cast<uint64_t *>(outBuffer);
+      *result = 0x100000000;
       return true;
     }
     }
@@ -1082,7 +1091,7 @@ static CompilerType GetWeakReferent(TypeSystemSwiftTypeRef &ts,
 }
 
 static CompilerType
-GetTypeFromTypeRef(TypeSystemSwiftTypeRef &ts,
+GetTypeFromTypeRef(TypeSystem &ts,
                    const swift::reflection::TypeRef *type_ref) {
   if (!type_ref)
     return {};
@@ -1390,7 +1399,7 @@ bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(
     DataExtractor data;
     uint64_t buffer_size = valobj.GetData(data, tmp_error);
     if (!tmp_error.Success() || buffer_size < enum_size) {
-      error.SetErrorStringWithFormatv("Could not get data from valobj {}.",
+      error.SetErrorStringWithFormatv("Could not get data from valobj {0}.",
                                       valobj.GetName());
       return false;
     }

@@ -15,7 +15,13 @@ struct T {
   let a = 2
 }
 
-enum ResEnum {
+enum ResEnum1 {
+  case a
+  case b
+  case s(S)
+}
+
+enum ResEnum2 {
   case a
   case b
   case t(T)
@@ -32,14 +38,20 @@ func main() {
   let t_opt : Optional<T> = t
   let t_nil_opt : Optional<T> = nil
 
-  let r_enum_a = ResEnum.a
-  let r_enum_a_opt : Optional<ResEnum> = r_enum_a
+  let r_enum1_a = ResEnum1.a
+  let r_enum1_a_opt : Optional<ResEnum1> = r_enum1_a
 
-  let r_enum_t = ResEnum.t(t)
-  let r_enum_t_opt : Optional<ResEnum> = r_enum_t
+  let r_enum1_s = ResEnum1.s(s)
+  let r_enum1_s_opt : Optional<ResEnum1> = r_enum1_s
+   
+  let r_enum2_a = ResEnum2.a
+  let r_enum2_a_opt : Optional<ResEnum2> = r_enum2_a
 
-  let r_enum_s = ResEnum.s(s)
-  let r_enum_s_opt : Optional<ResEnum> = r_enum_s
+  let r_enum2_t = ResEnum2.t(t)
+  let r_enum2_t_opt : Optional<ResEnum2> = r_enum2_t
+
+  let r_enum2_s = ResEnum2.s(s)
+  let r_enum2_s_opt : Optional<ResEnum2> = r_enum2_s
    
   print(s.a) // break here
 }

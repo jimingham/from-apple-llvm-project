@@ -38,17 +38,13 @@ lldb_private::formatters::swift::EnumSyntheticFrontEnd::EnumSyntheticFrontEnd(
     : SyntheticChildrenFrontEnd(*valobj_sp.get()), m_exe_ctx_ref(),
       m_element_name(), m_element_offset(LLDB_INVALID_ADDRESS),
       m_element_length(LLDB_INVALID_ADDRESS), m_is_optional(false),
-      m_is_none(false), m_has_payload(false), m_is_valid(false),
-      m_child_index(UINT32_MAX) {
+      m_has_payload(false), m_is_valid(false) {
   if (valobj_sp)
     Update();
 }
 
 size_t
 lldb_private::formatters::swift::EnumSyntheticFrontEnd::CalculateNumChildren() {
-  if (!m_is_valid || !m_has_payload)
-    return 0;
-
   if (m_current_value_sp)
     return m_current_value_sp->GetNumChildren();
   return 0;
@@ -66,32 +62,11 @@ lldb_private::formatters::swift::EnumSyntheticFrontEnd::GetChildAtIndex(
     return {};
   else
     return m_current_value_sp->GetChildAtIndex(idx, true);
-
-  if (idx)
-    return {};
-  if (m_child_index == UINT32_MAX)
-    return {};
-  
-  Status error;
-  DataExtractor backend_data;
-  uint64_t bytes = m_backend.GetData(backend_data, error);
-  if (!error.Success()) {
-    // FIXME: Propagate error
-    return {};
-  }
-  if (bytes < m_element_length) {
-    return {};
-  }
-  DataExtractor element_data(backend_data, m_element_offset, m_element_length);
-  return CreateValueObjectFromData(m_element_name.c_str(), element_data, 
-                                   m_backend.GetExecutionContextRef(), 
-                                   m_element_type);
 }
 
 bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::Update() {
   m_element_name.clear();
   m_current_value_sp.reset();
-  m_child_index = UINT32_MAX;
   m_is_valid = false;
   
   m_exe_ctx_ref = m_backend.GetExecutionContextRef();
@@ -118,9 +93,7 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::Update() {
   m_element_length = enum_info.case_length;
   m_is_optional = enum_info.is_optional;
   m_has_payload = enum_info.has_payload;
-  
-  m_child_index = 0; // There is only ever one child.  This is about the values
-                     // not the possible variants.
+
   // If we don't have a payload we can't create a value, so just return.
   if (!m_has_payload)
     return true;
@@ -140,6 +113,7 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::Update() {
       = CreateValueObjectFromData(m_element_name.c_str(), element_data, 
                                   m_backend.GetExecutionContextRef(), 
                                   m_element_type);
+  
   if (!m_current_value_sp) {
     m_is_valid = false;
     return false;
@@ -152,10 +126,11 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::
     MightHaveChildren() {
   if (!m_is_valid || !m_has_payload || !m_current_value_sp)
     return false;
-  else 
+  else
     return m_current_value_sp->MightHaveChildren();
 }
 
+// FIXME: Is this right when we are treating the value of the enum as its payload?
 size_t
 lldb_private::formatters::swift::EnumSyntheticFrontEnd::GetIndexOfChildWithName(
     ConstString name) {
@@ -200,8 +175,9 @@ bool lldb_private::formatters::swift::SwiftEnum_SummaryProvider(
     return true; // We
   }
   if (enum_info.is_optional) {
-    if (enum_info.case_name =="none")
+    if (enum_info.case_name =="none") {
       stream.PutCString("nil");
+    }
   } else
     stream.PutCString(enum_info.case_name.c_str());
   
