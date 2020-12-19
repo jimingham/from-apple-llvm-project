@@ -48,9 +48,9 @@ private:
   lldb::addr_t m_element_offset;
   lldb::addr_t m_element_length;
   bool m_is_optional;
-  bool m_has_payload;
   bool m_is_valid;
-  lldb::ValueObjectSP m_current_value_sp;
+  lldb::ValueObjectSP m_current_payload_sp;
+  lldb::ValueObjectSP m_current_case_sp;
 };
 
 SyntheticChildrenFrontEnd *EnumSyntheticFrontEndCreator(CXXSyntheticChildren *,

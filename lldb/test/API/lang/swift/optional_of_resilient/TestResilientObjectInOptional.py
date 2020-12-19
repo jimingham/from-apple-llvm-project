@@ -56,15 +56,19 @@ class TestResilientObjectInOptional(TestBase):
         lldbutil.check_variable(self, t_opt_var, num_children=1)
         t_a_var = t_opt_var.GetChildMemberWithName("a")
         lldbutil.check_variable(self, t_a_var, value="2", summary="")
-        
+
         # Try a normal enum with this resilient element.
-        enum_var = frame.FindVariable("r_enum_s")
+        # First when the resilient element is selected:
+        enum_var = frame.FindVariable("r_enum2_s")
         # The summary is the name of the projected case, which should be "s" here:
-        lldbutil.check_variable(self, enum_var, summary="s", num_children=5)
+        lldbutil.check_variable(self, enum_var, summary=".s", num_children=5)
 
         # The children are just the projected value, so:
         enum_var_a = enum_var.GetChildMemberWithName("a")
         lldbutil.check_variable(self, enum_var_a, value="1")
+
+        # Next when the non-resilient element is selected:
+        
 
         # Make sure we can print an optional of a resiliant type...
         # If we got the value out of the optional correctly, its children will be the

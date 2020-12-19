@@ -235,7 +235,9 @@ protected:
 
   std::shared_ptr<swift::remote::MemoryReader> GetMemoryReader();
 
-  void PushLocalBuffer(uint64_t local_buffer, uint64_t local_buffer_size);
+  // Pushes local_buffer onto the search path for memory.  Also taints the 
+  // address so that it can be disambiguated from the remote addresses:
+  void PushLocalBuffer(uint64_t &local_buffer, uint64_t local_buffer_size);
 
   void PopLocalBuffer();
 
