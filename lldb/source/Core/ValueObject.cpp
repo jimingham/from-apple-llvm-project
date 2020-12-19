@@ -1555,6 +1555,14 @@ addr_t ValueObject::GetAddressOf(bool scalar_is_load_address,
   case Value::eValueTypeHostAddress: {
     if (address_type)
       *address_type = m_value.GetValueAddressType();
+    if (m_value.GetValueAddressType() == eAddressTypeHost) {
+      lldb::offset_t offset_ptr = 0;
+      const void *start_addr = m_data.GetData(&offset_ptr, 1);
+      if (start_addr == nullptr) 
+        return LLDB_INVALID_ADDRESS;
+      else
+        return reinterpret_cast<lldb::addr_t>(start_addr);
+    }
     // FIXME - Shouldn't this return the address of the local DataExtractor buffer?
     return LLDB_INVALID_ADDRESS;
   } break;
