@@ -87,7 +87,7 @@ class TestSwiftArchetypeResolution(TestBase):
         var_x = self.frame().FindVariable("x")
         var_x.SetPreferDynamicValue(lldb.eDynamicCanRunTarget)
         var_x.SetPreferSyntheticValue(True)
-        self.assertTrue(var_x.GetValue() == 'A', "E case fails")
+        self.assertTrue(var_x.GetSummary() == '.A', "E case fails")
         if self.TraceOn():
             self.runCmd("frame variable -d run")
 
@@ -117,6 +117,6 @@ class TestSwiftArchetypeResolution(TestBase):
         var_x = self.frame().FindVariable("x")
         var_x.SetPreferDynamicValue(lldb.eDynamicCanRunTarget)
         var_x.SetPreferSyntheticValue(True)
-        self.assertTrue(var_x.GetValue() == 'A', "GE case fails")
+        self.assertTrue(var_x.GetSummary() == '.A', "GE case fails")
         if self.TraceOn():
             self.runCmd("frame variable -d run")

@@ -69,7 +69,6 @@ class LLVMContext;
 }
 
 class DWARFASTParser;
-class SwiftEnumDescriptor;
 
 namespace lldb_private {
 
@@ -748,6 +747,10 @@ public:
           &modules,
       Status &error);
 
+  TypeSystemSwiftTypeRef *GetTypeRefTypeSystem() {
+    return &m_typeref_typesystem;
+  }
+
 protected:
   /// This map uses the string value of ConstStrings as the key, and the
   /// TypeBase
@@ -870,8 +873,6 @@ protected:
   /// Retrieve the stored properties for the given nominal type declaration.
   llvm::ArrayRef<swift::VarDecl *>
   GetStoredProperties(swift::NominalTypeDecl *nominal);
-
-  SwiftEnumDescriptor *GetCachedEnumInfo(lldb::opaque_compiler_type_t type);
 
   friend class CompilerType;
 

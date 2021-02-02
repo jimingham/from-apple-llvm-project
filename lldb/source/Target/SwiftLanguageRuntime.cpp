@@ -291,6 +291,14 @@ public:
     return {};
   }
 
+  bool GetCurrentEnumValue(ValueObject &valobj, 
+                           SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info,
+                           Status &error) {
+    STUB_LOG();
+    error.SetErrorString("GetCurrentEnumValue unimplemented in stub runtime");
+    return false;
+  }
+
   bool GetObjectDescription(Stream &str, ValueObject &object) {
     STUB_LOG();
     return false;
@@ -2211,6 +2219,13 @@ llvm::Optional<unsigned>
 SwiftLanguageRuntime::GetNumFields(CompilerType type,
                                    ExecutionContext *exe_ctx) {
   FORWARD(GetNumFields, type, exe_ctx);
+}
+
+bool SwiftLanguageRuntime::GetCurrentEnumValue(
+    ValueObject &valobj,
+    SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info,
+    Status &error) {
+  FORWARD(GetCurrentEnumValue, valobj, enum_info, error);                                               
 }
 
 bool SwiftLanguageRuntime::GetObjectDescription(Stream &str,

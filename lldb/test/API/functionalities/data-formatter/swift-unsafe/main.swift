@@ -58,14 +58,14 @@ func main() {
     //% self.expect("frame variable -d run-target mutbuf",
     //%            patterns=[
     //%            '\(UnsafeMutableBufferPointer<(.*)\.Toggle>\) mutbuf = 1 value \(0[xX][0-9a-fA-F]+\) {',
-    //%              '\[0\] = Off',
+    //%              '\[0\] = .Off',
     //%            ])
     mutbuf[0] = Toggle.On
     print("... and here!")
     //% self.expect("frame variable -d run-target mutbuf",
     //%            patterns=[
     //%            '\(UnsafeMutableBufferPointer<(.*)\.Toggle>\) mutbuf = 1 value \(0[xX][0-9a-fA-F]+\) {',
-    //%              '\[0\] = On',
+    //%              '\[0\] = .On',
     //%            ])
   }
 
@@ -75,15 +75,15 @@ func main() {
   //% self.expect("frame variable -d run-target unsafe_ptr",
   //%            patterns=[
   //%            '\(UnsafePointer<(.*)\.ColorCode>\) unsafe_ptr = 0[xX][0-9a-fA-F]+ {',
-  //%            '\[0\] = RGB {',
-  //%            'RGB = \(0 = 155, 1 = 219, 2 = 255\)'
+  //%            '\[0\] = .RGB {',
+  //%            ' = \(0 = 155, 1 = 219, 2 = 255\)'
   //%            ])
 
   var unsafe_mutable_ptr = UnsafeMutablePointer(&colors[1])
   //% self.expect("frame variable -d run-target unsafe_mutable_ptr",
   //%            patterns=[
   //%            '\(UnsafeMutablePointer<(.*)\.ColorCode>\) unsafe_mutable_ptr = 0[xX][0-9a-fA-F]+ {',
-  //%            '\[0\] = Hex \(Hex = 4539903\)'
+  //%            '\[0\] = .Hex \( = 4539903\)'
   //%            ])
 
   let unsafe_raw_ptr = UnsafeRawPointer(&colors[0])
@@ -97,8 +97,8 @@ func main() {
     //% self.expect("frame variable -d run-target buf",
     //%            patterns=[
     //%            '\(UnsafeBufferPointer<(.*)\.ColorCode>\) buf = 2 values \(0[xX][0-9a-fA-F]+\) {',
-    //%            '\[0\] = RGB {',
-    //%            'RGB = \(0 = 155, 1 = 219, 2 = 255\)',
+    //%            '\[0\] = .RGB {',
+    //%            ' = \(0 = 155, 1 = 219, 2 = 255\)',
     //%            '\[1\] = Hex \(Hex = 4539903\)',
     //%            ])
   }

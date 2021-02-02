@@ -139,6 +139,10 @@ public:
       uint32_t &child_bitfield_bit_offset, bool &child_is_base_class,
       bool &child_is_deref_of_parent, ValueObject *valobj,
       uint64_t &language_flags);
+  
+  bool GetCurrentEnumValue(ValueObject &valobj, 
+                           SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info, 
+                           Status &error);
 
   /// Like \p BindGenericTypeParameters but for TypeSystemSwiftTypeRef.
   CompilerType BindGenericTypeParameters(StackFrame &stack_frame,
@@ -243,9 +247,15 @@ protected:
 
   std::shared_ptr<swift::remote::MemoryReader> GetMemoryReader();
 
-  void PushLocalBuffer(uint64_t local_buffer, uint64_t local_buffer_size);
+  // Pushes local_buffer onto the target so it's available for reflection.
+  // Returns the address of the remote buffer.
+  lldb::addr_t PushLocalBuffer(uint64_t local_addr, uint64_t local_buffer_size);
 
-  void PopLocalBuffer();
+  // Pop the remote buffer at the address PushLocalBuffer returned above.
+  void PopLocalBuffer(lldb::addr_t remote_addr);
+  // This stores the buffers we've pushed down to the target in PushLocalBuffer,
+  // and their sizes, so that we can deallocate them in PopLocalBuffer.
+  std::unordered_map<lldb::addr_t, uint64_t> m_pushed_buffers;
 
   /// We have to load swift dependent libraries by hand, but if they
   /// are missing, we shouldn't keep trying.

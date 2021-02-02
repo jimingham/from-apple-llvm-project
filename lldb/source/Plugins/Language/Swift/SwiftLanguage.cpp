@@ -31,6 +31,7 @@
 
 #include "ObjCRuntimeSyntheticProvider.h"
 #include "SwiftFormatters.h"
+#include "SwiftEnum.h"
 
 #include <functional>
 #include <mutex>
@@ -446,79 +447,6 @@ static void LoadSwiftFormatters(lldb::TypeCategoryImplSP swift_category_sp) {
                 "ObjC object pointer summary provider",
                 ConstString("Builtin.ObjCPointer"), summary_flags);
 
-  TypeSummaryImpl::Flags optional_summary_flags;
-  optional_summary_flags.SetCascades(true)
-      .SetDontShowChildren(false) // this one will actually be calculated at
-                                  // runtime, what you pass here doesn't matter
-      .SetDontShowValue(true)
-      .SetHideItemNames(false)
-      .SetShowMembersOneLiner(false)
-      .SetSkipPointers(true)
-      .SetSkipReferences(false);
-
-  SyntheticChildren::Flags optional_synth_flags;
-  optional_synth_flags.SetCascades(true)
-      .SetSkipPointers(true)
-      .SetSkipReferences(false);
-
-  TypeSummaryImplSP swift_optional_summary_sp(
-      new lldb_private::formatters::swift::SwiftOptionalSummaryProvider(
-          optional_summary_flags));
-  TypeSummaryImplSP swift_unchecked_optional_summary_sp(
-      new lldb_private::formatters::swift::SwiftOptionalSummaryProvider(
-          optional_summary_flags));
-
-  // do not move the relative order of these - @unchecked needs to come first or
-  // else pain will ensue
-  AddSummary(swift_category_sp, swift_unchecked_optional_summary_sp,
-             ConstString("^Swift.ImplicitlyUnwrappedOptional<.+>$"), true);
-  AddSummary(swift_category_sp, swift_optional_summary_sp,
-             ConstString("^Swift.Optional<.+>$"), true);
-
-  AddSummary(swift_category_sp, swift_unchecked_optional_summary_sp,
-             ConstString("AnyObject!"), false);
-  AddSummary(swift_category_sp, swift_optional_summary_sp,
-             ConstString("AnyObject?"), false);
-
-  AddSummary(swift_category_sp, swift_unchecked_optional_summary_sp,
-             ConstString("()!"), false);
-  AddSummary(swift_category_sp, swift_optional_summary_sp, ConstString("()?"),
-             false);
-
-  AddCXXSynthetic(swift_category_sp,
-                  lldb_private::formatters::swift::
-                      SwiftUncheckedOptionalSyntheticFrontEndCreator,
-                  "Swift.Optional synthetic children",
-                  ConstString("^Swift.ImplicitlyUnwrappedOptional<.+>$"),
-                  optional_synth_flags, true);
-  AddCXXSynthetic(
-      swift_category_sp,
-      lldb_private::formatters::swift::SwiftOptionalSyntheticFrontEndCreator,
-      "Swift.Optional synthetic children", ConstString("^Swift.Optional<.+>$"),
-      optional_synth_flags, true);
-
-  AddCXXSynthetic(swift_category_sp,
-                  lldb_private::formatters::swift::
-                      SwiftUncheckedOptionalSyntheticFrontEndCreator,
-                  "Swift.Optional synthetic children",
-                  ConstString("AnyObject!"), optional_synth_flags, false);
-  AddCXXSynthetic(
-      swift_category_sp,
-      lldb_private::formatters::swift::SwiftOptionalSyntheticFrontEndCreator,
-      "Swift.Optional synthetic children", ConstString("AnyObject?"),
-      optional_synth_flags, false);
-
-  AddCXXSynthetic(swift_category_sp,
-                  lldb_private::formatters::swift::
-                      SwiftUncheckedOptionalSyntheticFrontEndCreator,
-                  "Swift.Optional synthetic children", ConstString("()!"),
-                  optional_synth_flags, false);
-  AddCXXSynthetic(
-      swift_category_sp,
-      lldb_private::formatters::swift::SwiftOptionalSyntheticFrontEndCreator,
-      "Swift.Optional synthetic children", ConstString("()?"),
-      optional_synth_flags, false);
-
   AddCXXSummary(swift_category_sp,
                 lldb_private::formatters::swift::Range_SummaryProvider,
                 "Swift.Range summary provider", ConstString("^Swift.Range<.+>$"),
@@ -738,6 +666,32 @@ SwiftLanguage::GetHardcodedSummaries() {
       }
       return nullptr;
     });
+    g_formatters.push_back([](lldb_private::ValueObject &valobj,
+                              lldb::DynamicValueType, FormatManager &)
+                               -> TypeSummaryImpl::SharedPointer {
+      static lldb::TypeSummaryImplSP swift_enum_summary_sp(nullptr);
+      CompilerType clang_type(valobj.GetCompilerType());
+      CompilerType type(valobj.GetCompilerType());
+      Flags type_flags(type.GetTypeInfo());
+      if (type_flags.AllSet(eTypeIsSwift | eTypeIsEnumeration)) {
+        if (!swift_enum_summary_sp) {
+          TypeSummaryImpl::Flags flags;
+          flags.SetCascades(true)
+              .SetDontShowChildren(false)
+              .SetDontShowValue(false)
+              .SetHideItemNames(false)
+              .SetShowMembersOneLiner(false)
+              .SetSkipPointers(false)
+              .SetSkipReferences(false);
+          swift_enum_summary_sp.reset(new CXXFunctionSummaryFormat(
+              flags,
+              lldb_private::formatters::swift::SwiftEnum_SummaryProvider,
+              "Swift Enum Summary"));
+        }
+        return swift_enum_summary_sp;
+      }
+      return {};
+    });
   });
 
   return g_formatters;
@@ -757,10 +711,10 @@ SwiftLanguage::GetHardcodedSynthetics() {
       CompilerType type(valobj.GetCompilerType());
       Flags type_flags(type.GetTypeInfo());
       if (type_flags.AllSet(eTypeIsSwift | eTypeIsEnumeration)) {
-        // FIXME: The classification of clang-imported enums may
-        // change based on whether a Swift module is present or not.
-        if (!valobj.GetValueAsCString())
-          return nullptr;
+//        // FIXME: The classification of clang-imported enums may
+//        // change based on whether a Swift module is present or not.
+//        if (!valobj.GetValueAsCString())
+//          return nullptr;
         if (!swift_enum_synth)
           swift_enum_synth = lldb::SyntheticChildrenSP(new CXXSyntheticChildren(
               SyntheticChildren::Flags()

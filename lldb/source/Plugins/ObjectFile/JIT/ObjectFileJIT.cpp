@@ -36,6 +36,10 @@
 #include "Utility/UuidCompatibility.h"
 #endif
 
+#ifdef LLDB_ENABLE_SWIFT
+#include "swift/ABI/ObjectFile.h"
+#endif //LLDB_ENABLE_SWIFT
+
 using namespace lldb;
 using namespace lldb_private;
 
@@ -187,7 +191,41 @@ lldb_private::Address ObjectFileJIT::GetEntryPointAddress() {
   return Address();
 }
 
-lldb_private::Address ObjectFileJIT::GetBaseAddress() { return Address(); }
+lldb_private::Address ObjectFileJIT::GetBaseAddress() {
+  // FIXME: Cheesy hack for MachO to find out what other problems there are
+  // ObjectFileJIT doesn't know what its underlying object file
+  // format is, and the Deletate is IRExecutionUnit which is also
+  // ObjectFile format independent.  So it's not clear how to
+  // generalize this.
+  static ConstString g_segment_name_TEXT("__text");
+  lldb_private::Address header_addr;
+  SectionList *section_list = GetSectionList();
+  if (section_list) {
+    SectionSP text_segment_sp(
+        section_list->FindSectionByName(g_segment_name_TEXT));
+    if (text_segment_sp) {
+      header_addr.SetSection(text_segment_sp);
+      header_addr.SetOffset(0);
+    }
+  }
+  return header_addr;
+}
+
+// FIXME: Cheesy hack for MahcO.  ObjectFileJIT needs to know what the object
+// file format it wrote into memory was so it can find this sort of thing.
+// Or we need ObjectFileJITMachO, etc.  But that gets weird because of the
+// requirement that the IRExecutionUnit (which is the ObjectFileJITDelegate)
+// is also ObjectFile independent.
+llvm::StringRef ObjectFileJIT::GetReflectionSectionIdentifier(
+    swift::ReflectionSectionKind section) {
+#ifdef LLDB_ENABLE_SWIFT
+  swift::SwiftObjectFileFormatMachO file_format_mach_o;
+  return file_format_mach_o.getSectionName(section);
+#else
+  llvm_unreachable("Swift support disabled");
+#endif //LLDB_ENABLE_SWIFT
+}
+
 
 ObjectFile::Type ObjectFileJIT::CalculateType() { return eTypeJIT; }
 

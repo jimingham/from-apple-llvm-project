@@ -91,6 +91,7 @@
 #include "Plugins/ExpressionParser/Swift/SwiftHost.h"
 #include "Plugins/ExpressionParser/Swift/SwiftUserExpression.h"
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
+#include "Plugins/Language/Swift/SwiftEnum.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/DumpDataExtractor.h"
 #include "lldb/Core/Module.h"
@@ -248,28 +249,6 @@ static ThreadSafeSwiftASTMap &GetASTMap() {
   return *g_map_ptr;
 }
 
-class SwiftEnumDescriptor;
-
-typedef std::shared_ptr<SwiftEnumDescriptor> SwiftEnumDescriptorSP;
-typedef llvm::DenseMap<opaque_compiler_type_t, SwiftEnumDescriptorSP>
-    EnumInfoCache;
-typedef std::shared_ptr<EnumInfoCache> EnumInfoCacheSP;
-typedef llvm::DenseMap<const swift::ASTContext *, EnumInfoCacheSP>
-    ASTEnumInfoCacheMap;
-
-static EnumInfoCache *GetEnumInfoCache(const swift::ASTContext *a) {
-  static ASTEnumInfoCacheMap g_cache;
-  static std::mutex g_mutex;
-  std::lock_guard<std::mutex> locker(g_mutex);
-  ASTEnumInfoCacheMap::iterator pos = g_cache.find(a);
-  if (pos == g_cache.end()) {
-    g_cache.insert(
-        std::make_pair(a, std::shared_ptr<EnumInfoCache>(new EnumInfoCache())));
-    return g_cache.find(a)->second.get();
-  }
-  return pos->second.get();
-}
-
 namespace {
 bool IsDirectory(const FileSpec &spec) {
   return llvm::sys::fs::is_directory(spec.GetPath());
@@ -299,95 +278,6 @@ SwiftASTContext::GetStoredProperties(swift::NominalTypeDecl *nominal) {
                                          stored_properties.end());
   return stored;
 }
-
-class SwiftEnumDescriptor {
-public:
-  enum class Kind {
-    Empty,      ///< No cases in this enum.
-    CStyle,     ///< No cases have payloads.
-    AllPayload, ///< All cases have payloads.
-    Mixed,      ///< Some cases have payloads.
-    Resilient   ///< A resilient enum.
-  };
-
-  struct ElementInfo {
-    lldb_private::ConstString name;
-    CompilerType payload_type;
-    bool has_payload : 1;
-    bool is_indirect : 1;
-  };
-
-  Kind GetKind() const { return m_kind; }
-
-  ConstString GetTypeName() { return m_type_name; }
-
-  virtual ElementInfo *
-  GetElementFromData(const lldb_private::DataExtractor &data,
-                     bool no_payload) = 0;
-
-  virtual size_t GetNumElements() {
-    return GetNumElementsWithPayload() + GetNumCStyleElements();
-  }
-
-  virtual size_t GetNumElementsWithPayload() = 0;
-
-  virtual size_t GetNumCStyleElements() = 0;
-
-  virtual ElementInfo *GetElementWithPayloadAtIndex(size_t idx) = 0;
-
-  virtual ElementInfo *GetElementWithNoPayloadAtIndex(size_t idx) = 0;
-
-  virtual ~SwiftEnumDescriptor() = default;
-
-  static SwiftEnumDescriptor *CreateDescriptor(swift::ASTContext *ast,
-                                               swift::CanType swift_can_type,
-                                               swift::EnumDecl *enum_decl);
-
-protected:
-  SwiftEnumDescriptor(swift::ASTContext *ast, swift::CanType swift_can_type,
-                      swift::EnumDecl *enum_decl, SwiftEnumDescriptor::Kind k)
-      : m_kind(k), m_type_name() {
-    if (swift_can_type.getPointer()) {
-      if (auto nominal = swift_can_type->getAnyNominal()) {
-        swift::Identifier name(nominal->getName());
-        if (name.get())
-          m_type_name.SetCString(name.get());
-      }
-    }
-  }
-
-private:
-  Kind m_kind;
-  ConstString m_type_name;
-};
-
-class SwiftEmptyEnumDescriptor : public SwiftEnumDescriptor {
-public:
-  SwiftEmptyEnumDescriptor(swift::ASTContext *ast,
-                           swift::CanType swift_can_type,
-                           swift::EnumDecl *enum_decl)
-      : SwiftEnumDescriptor(ast, swift_can_type, enum_decl,
-                            SwiftEnumDescriptor::Kind::Empty) {}
-
-  ElementInfo *GetElementFromData(const lldb_private::DataExtractor &data,
-                                  bool no_payload) override {
-    return nullptr;
-  }
-
-  size_t GetNumElementsWithPayload() override { return 0; }
-  size_t GetNumCStyleElements() override { return 0; }
-  ElementInfo *GetElementWithPayloadAtIndex(size_t idx) override {
-    return nullptr;
-  }
-
-  ElementInfo *GetElementWithNoPayloadAtIndex(size_t idx) override {
-    return nullptr;
-  }
-
-  static bool classof(const SwiftEnumDescriptor *S) {
-    return S->GetKind() == SwiftEnumDescriptor::Kind::Empty;
-  }
-};
 
 namespace std {
 template <> struct less<swift::ClusteredBitVector> {
@@ -421,434 +311,6 @@ static std::string Dump(const swift::ClusteredBitVector &bit_vector) {
   }
   ostream.flush();
   return buffer;
-}
-
-class SwiftCStyleEnumDescriptor : public SwiftEnumDescriptor {
-  llvm::SmallString<32> m_description = {"SwiftCStyleEnumDescriptor"};
-
-public:
-  SwiftCStyleEnumDescriptor(swift::ASTContext *ast,
-                            swift::CanType swift_can_type,
-                            swift::EnumDecl *enum_decl)
-      : SwiftEnumDescriptor(ast, swift_can_type, enum_decl,
-                            SwiftEnumDescriptor::Kind::CStyle),
-        m_nopayload_elems_bitmask(), m_elements(), m_element_indexes() {
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "doing C-style enum layout for %s",
-               GetTypeName().AsCString());
-
-    SwiftASTContext *swift_ast_ctx = SwiftASTContext::GetSwiftASTContext(ast);
-    swift::irgen::IRGenModule &irgen_module = swift_ast_ctx->GetIRGenModule();
-    const swift::irgen::EnumImplStrategy &enum_impl_strategy =
-        swift::irgen::getEnumImplStrategy(irgen_module, swift_can_type);
-    llvm::ArrayRef<swift::irgen::EnumImplStrategy::Element>
-        elements_with_no_payload =
-            enum_impl_strategy.getElementsWithNoPayload();
-    const bool has_payload = false;
-    const bool is_indirect = false;
-    uint64_t case_counter = 0;
-    m_nopayload_elems_bitmask =
-        enum_impl_strategy.getBitMaskForNoPayloadElements();
-
-    if (enum_decl->isObjC())
-      m_is_objc_enum = true;
-
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "m_nopayload_elems_bitmask = %s",
-               Dump(m_nopayload_elems_bitmask).c_str());
-
-    for (auto enum_case : elements_with_no_payload) {
-      ConstString case_name(enum_case.decl->getBaseIdentifier().str());
-      swift::ClusteredBitVector case_value =
-          enum_impl_strategy.getBitPatternForNoPayloadElement(enum_case.decl);
-
-      LOG_PRINTF(LIBLLDB_LOG_TYPES, "case_name = %s, unmasked value = %s",
-                 case_name.AsCString(), Dump(case_value).c_str());
-
-      case_value &= m_nopayload_elems_bitmask;
-
-      LOG_PRINTF(LIBLLDB_LOG_TYPES, "case_name = %s, masked value = %s",
-                 case_name.AsCString(), Dump(case_value).c_str());
-
-      std::unique_ptr<ElementInfo> elem_info(
-          new ElementInfo{case_name, CompilerType(), has_payload, is_indirect});
-      m_element_indexes.emplace(case_counter, elem_info.get());
-      case_counter++;
-      m_elements.emplace(case_value, std::move(elem_info));
-    }
-  }
-
-  ElementInfo *GetElementFromData(const lldb_private::DataExtractor &data,
-                                  bool no_payload) override {
-    LOG_PRINTF(LIBLLDB_LOG_TYPES,
-               "C-style enum - inspecting data to find enum case for type %s",
-               GetTypeName().AsCString());
-
-    swift::ClusteredBitVector current_payload;
-    lldb::offset_t offset = 0;
-    for (size_t idx = 0; idx < data.GetByteSize(); idx++) {
-      uint64_t byte = data.GetU8(&offset);
-      current_payload.add(8, byte);
-    }
-
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "m_nopayload_elems_bitmask        = %s",
-               Dump(m_nopayload_elems_bitmask).c_str());
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "current_payload                  = %s",
-               Dump(current_payload).c_str());
-
-    if (current_payload.size() != m_nopayload_elems_bitmask.size()) {
-      LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                 "sizes don't match; getting out with an error");
-      return nullptr;
-    }
-
-    // A C-Like Enum  is laid out as an integer tag with the minimal number of
-    // bits to contain all of the cases. The cases are assigned tag values in
-    // declaration order. e.g.
-    // enum Patatino { // => LLVM i1
-    // case X         // => i1 0
-    // case Y         // => i1 1
-    // }
-    // From this we can find out the number of bits really used for the payload.
-    if (!m_is_objc_enum) {
-      current_payload &= m_nopayload_elems_bitmask;
-      auto elem_mask =
-          swift::ClusteredBitVector::getConstant(current_payload.size(), false);
-      int64_t bit_count = m_elements.size() - 1;
-      if (bit_count > 0 && no_payload) {
-        uint64_t bit_set = 0;
-        while (bit_count > 0) {
-          elem_mask.setBit(bit_set);
-          bit_set += 1;
-          bit_count /= 2;
-        }
-        current_payload &= elem_mask;
-      }
-    }
-
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "masked current_payload           = %s",
-               Dump(current_payload).c_str());
-
-    auto iter = m_elements.find(current_payload), end = m_elements.end();
-    if (iter == end) {
-      LOG_PRINTF(LIBLLDB_LOG_TYPES, "bitmask search failed");
-      return nullptr;
-    }
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "bitmask search success - found case %s",
-               iter->second.get()->name.AsCString());
-    return iter->second.get();
-  }
-
-  size_t GetNumElementsWithPayload() override { return 0; }
-  size_t GetNumCStyleElements() override { return m_elements.size(); }
-
-  ElementInfo *GetElementWithPayloadAtIndex(size_t idx) override {
-    return nullptr;
-  }
-
-  ElementInfo *GetElementWithNoPayloadAtIndex(size_t idx) override {
-    if (idx >= m_element_indexes.size())
-      return nullptr;
-    return m_element_indexes[idx];
-  }
-
-  static bool classof(const SwiftEnumDescriptor *S) {
-    return S->GetKind() == SwiftEnumDescriptor::Kind::CStyle;
-  }
-
-  virtual ~SwiftCStyleEnumDescriptor() = default;
-
-private:
-  swift::ClusteredBitVector m_nopayload_elems_bitmask;
-  std::map<swift::ClusteredBitVector, std::unique_ptr<ElementInfo>> m_elements;
-  std::map<uint64_t, ElementInfo *> m_element_indexes;
-  bool m_is_objc_enum = false;
-};
-
-class SwiftAllPayloadEnumDescriptor : public SwiftEnumDescriptor {
-  llvm::SmallString<32> m_description = {"SwiftAllPayloadEnumDescriptor"};
-
-public:
-  SwiftAllPayloadEnumDescriptor(swift::ASTContext *ast,
-                                swift::CanType swift_can_type,
-                                swift::EnumDecl *enum_decl)
-      : SwiftEnumDescriptor(ast, swift_can_type, enum_decl,
-                            SwiftEnumDescriptor::Kind::AllPayload) {
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "doing ADT-style enum layout for %s",
-               GetTypeName().AsCString());
-
-    SwiftASTContext *swift_ast_ctx = SwiftASTContext::GetSwiftASTContext(ast);
-    swift::irgen::IRGenModule &irgen_module = swift_ast_ctx->GetIRGenModule();
-    const swift::irgen::EnumImplStrategy &enum_impl_strategy =
-        swift::irgen::getEnumImplStrategy(irgen_module, swift_can_type);
-    llvm::ArrayRef<swift::irgen::EnumImplStrategy::Element>
-        elements_with_payload = enum_impl_strategy.getElementsWithPayload();
-    m_tag_bits = enum_impl_strategy.getTagBitsForPayloads();
-
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "tag_bits = %s", Dump(m_tag_bits).c_str());
-
-    auto module_ctx = enum_decl->getModuleContext();
-    const bool has_payload = true;
-    for (auto enum_case : elements_with_payload) {
-      ConstString case_name(enum_case.decl->getBaseIdentifier().str());
-
-      swift::EnumElementDecl *case_decl = enum_case.decl;
-      assert(case_decl);
-      auto arg_type = case_decl->getArgumentInterfaceType();
-      CompilerType case_type;
-      if (arg_type) {
-        case_type = ToCompilerType(
-            {swift_can_type->getTypeOfMember(module_ctx, case_decl, arg_type)
-                 ->getCanonicalType()
-                 .getPointer()});
-      }
-
-      const bool is_indirect =
-          case_decl->isIndirect() || case_decl->getParentEnum()->isIndirect();
-
-      LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                 "case_name = %s, type = %s, is_indirect = %s",
-                 case_name.AsCString(), case_type.GetTypeName().AsCString(),
-                 is_indirect ? "yes" : "no");
-
-      std::unique_ptr<ElementInfo> elem_info(
-          new ElementInfo{case_name, case_type, has_payload, is_indirect});
-      m_elements.push_back(std::move(elem_info));
-    }
-  }
-
-  ElementInfo *GetElementFromData(const lldb_private::DataExtractor &data,
-                                  bool no_payload) override {
-    LOG_PRINTF(LIBLLDB_LOG_TYPES,
-               "ADT-style enum - inspecting data to find enum case for type %s",
-               GetTypeName().AsCString());
-
-    // No elements, just fail.
-    if (m_elements.size() == 0) {
-      LOG_PRINTF(LIBLLDB_LOG_TYPES, "enum with no cases. getting out");
-      return nullptr;
-    }
-    // One element, so it's got to be it.
-    if (m_elements.size() == 1) {
-      LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                 "enum with one case. getting out easy with %s",
-                 m_elements.front().get()->name.AsCString());
-
-      return m_elements.front().get();
-    }
-
-    swift::ClusteredBitVector current_payload;
-    lldb::offset_t offset = 0;
-    for (size_t idx = 0; idx < data.GetByteSize(); idx++) {
-      uint64_t byte = data.GetU8(&offset);
-      current_payload.add(8, byte);
-    }
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "tag_bits        = %s",
-               Dump(m_tag_bits).c_str());
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "current_payload = %s",
-               Dump(current_payload).c_str());
-
-    if (current_payload.size() != m_tag_bits.size()) {
-      LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                 "sizes don't match; getting out with an error");
-      return nullptr;
-    }
-
-    // FIXME: this assumes the tag bits should be gathered in
-    // little-endian byte order.
-    size_t discriminator = 0;
-    size_t power_of_2 = 1;
-    for (size_t i = 0; i < m_tag_bits.size(); ++i) {
-      if (m_tag_bits[i]) {
-        discriminator |= current_payload[i] ? power_of_2 : 0;
-        power_of_2 <<= 1;
-      }
-    }
-
-    // The discriminator is too large?
-    if (discriminator >= m_elements.size()) {
-      LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                 "discriminator value of %" PRIu64 " too large, getting out",
-                 (uint64_t)discriminator);
-      return nullptr;
-    } else {
-      auto ptr = m_elements[discriminator].get();
-      if (!ptr)
-        LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                   "discriminator value of %" PRIu64
-                   " acceptable, but null case matched - that's bad",
-                   (uint64_t)discriminator);
-      else
-        LOG_PRINTF(LIBLLDB_LOG_TYPES,
-                   "discriminator value of %" PRIu64
-                   " acceptable, case %s matched",
-                   (uint64_t)discriminator, ptr->name.AsCString());
-      return ptr;
-    }
-  }
-
-  size_t GetNumElementsWithPayload() override { return m_elements.size(); }
-  size_t GetNumCStyleElements() override { return 0; }
-
-  ElementInfo *GetElementWithPayloadAtIndex(size_t idx) override {
-    if (idx >= m_elements.size())
-      return nullptr;
-    return m_elements[idx].get();
-  }
-
-  ElementInfo *GetElementWithNoPayloadAtIndex(size_t idx) override {
-    return nullptr;
-  }
-
-  static bool classof(const SwiftEnumDescriptor *S) {
-    return S->GetKind() == SwiftEnumDescriptor::Kind::AllPayload;
-  }
-
-private:
-  swift::ClusteredBitVector m_tag_bits;
-  std::vector<std::unique_ptr<ElementInfo>> m_elements;
-};
-
-class SwiftMixedEnumDescriptor : public SwiftEnumDescriptor {
-public:
-  SwiftMixedEnumDescriptor(swift::ASTContext *ast,
-                           swift::CanType swift_can_type,
-                           swift::EnumDecl *enum_decl)
-      : SwiftEnumDescriptor(ast, swift_can_type, enum_decl,
-                            SwiftEnumDescriptor::Kind::Mixed),
-        m_non_payload_cases(ast, swift_can_type, enum_decl),
-        m_payload_cases(ast, swift_can_type, enum_decl) {}
-
-  ElementInfo *GetElementFromData(const lldb_private::DataExtractor &data,
-                                  bool no_payload) override {
-    ElementInfo *elem_info =
-        m_non_payload_cases.GetElementFromData(data, false);
-    return elem_info ? elem_info
-                     : m_payload_cases.GetElementFromData(data, false);
-  }
-
-  static bool classof(const SwiftEnumDescriptor *S) {
-    return S->GetKind() == SwiftEnumDescriptor::Kind::Mixed;
-  }
-
-  size_t GetNumElementsWithPayload() override {
-    return m_payload_cases.GetNumElementsWithPayload();
-  }
-
-  size_t GetNumCStyleElements() override {
-    return m_non_payload_cases.GetNumCStyleElements();
-  }
-
-  ElementInfo *GetElementWithPayloadAtIndex(size_t idx) override {
-    return m_payload_cases.GetElementWithPayloadAtIndex(idx);
-  }
-
-  ElementInfo *GetElementWithNoPayloadAtIndex(size_t idx) override {
-    return m_non_payload_cases.GetElementWithNoPayloadAtIndex(idx);
-  }
-
-private:
-  SwiftCStyleEnumDescriptor m_non_payload_cases;
-  SwiftAllPayloadEnumDescriptor m_payload_cases;
-};
-
-class SwiftResilientEnumDescriptor : public SwiftEnumDescriptor {
-  llvm::SmallString<32> m_description = {"SwiftResilientEnumDescriptor"};
-
-public:
-  SwiftResilientEnumDescriptor(swift::ASTContext *ast,
-                               swift::CanType swift_can_type,
-                               swift::EnumDecl *enum_decl)
-      : SwiftEnumDescriptor(ast, swift_can_type, enum_decl,
-                            SwiftEnumDescriptor::Kind::Resilient) {
-    LOG_PRINTF(LIBLLDB_LOG_TYPES, "doing resilient enum layout for %s",
-               GetTypeName().AsCString());
-  }
-
-  ElementInfo *GetElementFromData(const lldb_private::DataExtractor &data,
-                                  bool no_payload) override {
-    // Not yet supported by LLDB.
-    return nullptr;
-  }
-  size_t GetNumElementsWithPayload() override { return 0; }
-  size_t GetNumCStyleElements() override { return 0; }
-  ElementInfo *GetElementWithPayloadAtIndex(size_t idx) override {
-    return nullptr;
-  }
-  ElementInfo *GetElementWithNoPayloadAtIndex(size_t idx) override {
-    return nullptr;
-  }
-  static bool classof(const SwiftEnumDescriptor *S) {
-    return S->GetKind() == SwiftEnumDescriptor::Kind::Resilient;
-  }
-};
-
-SwiftEnumDescriptor *
-SwiftEnumDescriptor::CreateDescriptor(swift::ASTContext *ast,
-                                      swift::CanType swift_can_type,
-                                      swift::EnumDecl *enum_decl) {
-  assert(ast);
-  assert(enum_decl);
-  assert(swift_can_type.getPointer());
-  SwiftASTContext *swift_ast_ctx = SwiftASTContext::GetSwiftASTContext(ast);
-  assert(swift_ast_ctx);
-  swift::irgen::IRGenModule &irgen_module = swift_ast_ctx->GetIRGenModule();
-  const swift::irgen::EnumImplStrategy &enum_impl_strategy =
-      swift::irgen::getEnumImplStrategy(irgen_module, swift_can_type);
-  llvm::ArrayRef<swift::irgen::EnumImplStrategy::Element>
-      elements_with_payload = enum_impl_strategy.getElementsWithPayload();
-  llvm::ArrayRef<swift::irgen::EnumImplStrategy::Element>
-      elements_with_no_payload = enum_impl_strategy.getElementsWithNoPayload();
-  swift::SILType swift_sil_type = irgen_module.getLoweredType(swift_can_type);
-  if (!irgen_module.getTypeInfo(swift_sil_type).isFixedSize())
-    return new SwiftResilientEnumDescriptor(ast, swift_can_type, enum_decl);
-  if (elements_with_no_payload.size() == 0) {
-    // Nothing with no payload.. empty or all payloads?
-    if (elements_with_payload.size() == 0)
-      return new SwiftEmptyEnumDescriptor(ast, swift_can_type, enum_decl);
-    return new SwiftAllPayloadEnumDescriptor(ast, swift_can_type, enum_decl);
-  }
-
-  // Something with no payload.. mixed or C-style?
-  if (elements_with_payload.size() == 0)
-    return new SwiftCStyleEnumDescriptor(ast, swift_can_type, enum_decl);
-  return new SwiftMixedEnumDescriptor(ast, swift_can_type, enum_decl);
-}
-
-static SwiftEnumDescriptor *
-GetEnumInfoFromEnumDecl(swift::ASTContext *ast, swift::CanType swift_can_type,
-                        swift::EnumDecl *enum_decl) {
-  return SwiftEnumDescriptor::CreateDescriptor(ast, swift_can_type, enum_decl);
-}
-
-SwiftEnumDescriptor *
-SwiftASTContext::GetCachedEnumInfo(opaque_compiler_type_t type) {
-  VALID_OR_RETURN(nullptr);
-
-  if (type) {
-    EnumInfoCache *enum_info_cache = GetEnumInfoCache(GetASTContext());
-    EnumInfoCache::const_iterator pos = enum_info_cache->find(type);
-    if (pos != enum_info_cache->end())
-      return pos->second.get();
-
-    swift::CanType swift_can_type(GetCanonicalSwiftType(type));
-    if (!SwiftASTContext::IsFullyRealized(ToCompilerType({swift_can_type})))
-      return nullptr;
-
-    SwiftEnumDescriptorSP enum_info_sp;
-
-    if (auto *enum_type = swift_can_type->getAs<swift::EnumType>()) {
-      enum_info_sp.reset(GetEnumInfoFromEnumDecl(
-          GetASTContext(), swift_can_type, enum_type->getDecl()));
-    } else if (auto *bound_enum_type =
-                   swift_can_type->getAs<swift::BoundGenericEnumType>()) {
-      enum_info_sp.reset(GetEnumInfoFromEnumDecl(
-          GetASTContext(), swift_can_type, bound_enum_type->getDecl()));
-    }
-
-    if (enum_info_sp.get())
-      enum_info_cache->insert(std::make_pair(type, enum_info_sp));
-    return enum_info_sp.get();
-  }
-  return nullptr;
 }
 
 namespace {
@@ -5492,8 +4954,8 @@ SwiftASTContext::GetTypeInfo(opaque_compiler_type_t type,
     swift_flags |= eTypeIsGeneric | eTypeIsBound;
     LLVM_FALLTHROUGH;
   case swift::TypeKind::Enum: {
-    SwiftEnumDescriptor *cached_enum_info = GetCachedEnumInfo(type);
-    if (cached_enum_info)
+    swift::CanType swift_can_type(GetCanonicalSwiftType(type));
+    if (SwiftASTContext::IsFullyRealized(ToCompilerType({swift_can_type})))
       swift_flags |= eTypeHasValue | eTypeIsEnumeration | eTypeHasChildren;
     else
       swift_flags |= eTypeIsEnumeration;
@@ -6280,9 +5742,8 @@ uint32_t SwiftASTContext::GetNumChildren(opaque_compiler_type_t type,
 
   case swift::TypeKind::Enum:
   case swift::TypeKind::BoundGenericEnum: {
-    SwiftEnumDescriptor *cached_enum_info = GetCachedEnumInfo(type);
-    if (cached_enum_info)
-      return cached_enum_info->GetNumElementsWithPayload();
+    // FIXME: This has to be passed off to the TypeSystemTypeRef.
+    return 0;
   } break;
 
   case swift::TypeKind::Tuple:
@@ -6405,9 +5866,8 @@ uint32_t SwiftASTContext::GetNumFields(opaque_compiler_type_t type,
 
   case swift::TypeKind::Enum:
   case swift::TypeKind::BoundGenericEnum: {
-    SwiftEnumDescriptor *cached_enum_info = GetCachedEnumInfo(type);
-    if (cached_enum_info)
-      return cached_enum_info->GetNumElementsWithPayload();
+    // FIXME: Need to ask the associated TypeSystemTypeRef if it can do this...
+    return 0;
   } break;
 
   case swift::TypeKind::Tuple:
@@ -6984,25 +6444,9 @@ CompilerType SwiftASTContext::GetChildCompilerTypeAtIndex(
 
   case swift::TypeKind::Enum:
   case swift::TypeKind::BoundGenericEnum: {
-    SwiftEnumDescriptor *cached_enum_info = GetCachedEnumInfo(type);
-    if (cached_enum_info &&
-        idx < cached_enum_info->GetNumElementsWithPayload()) {
-      const SwiftEnumDescriptor::ElementInfo *element_info =
-          cached_enum_info->GetElementWithPayloadAtIndex(idx);
-      child_name.assign(element_info->name.GetCString());
-      if (!get_type_size(child_byte_size, element_info->payload_type))
-        return {};
-      child_byte_offset = 0;
-      child_bitfield_bit_size = 0;
-      child_bitfield_bit_offset = 0;
-      child_is_base_class = false;
-      child_is_deref_of_parent = false;
-      if (element_info->is_indirect) {
-        language_flags |= LanguageFlags::eIsIndirectEnumCase;
-        return ToCompilerType(GetASTContext()->TheRawPointerType.getPointer());
-      } else
-        return element_info->payload_type;
-    }
+    // FIXME: Have to pass this off to the TypeSystemTypeRef.
+    
+    return {};
   } break;
 
   case swift::TypeKind::Tuple: {
@@ -7279,19 +6723,8 @@ size_t SwiftASTContext::GetIndexOfChildMemberWithName(
 
     case swift::TypeKind::Enum:
     case swift::TypeKind::BoundGenericEnum: {
-      SwiftEnumDescriptor *cached_enum_info = GetCachedEnumInfo(type);
-      if (cached_enum_info) {
-        ConstString const_name(name);
-        const size_t num_sized_elements =
-            cached_enum_info->GetNumElementsWithPayload();
-        for (size_t i = 0; i < num_sized_elements; ++i) {
-          if (cached_enum_info->GetElementWithPayloadAtIndex(i)->name ==
-              const_name) {
-            child_indexes.push_back(i);
-            return child_indexes.size();
-          }
-        }
-      }
+      // FIXME: Enums have to get passed off to the TypeSystemTypeRef.
+      return 0;
     } break;
 
     case swift::TypeKind::Tuple: {
@@ -7466,26 +6899,8 @@ bool SwiftASTContext::GetSelectedEnumCase(const CompilerType &type,
                                           ConstString *name, bool *has_payload,
                                           CompilerType *payload,
                                           bool *is_indirect) {
-  swift::CanType swift_can_type = ::GetCanonicalSwiftType(type);
-  if (!swift_can_type)
-    return false;
-  auto *ast = GetSwiftASTContext(&swift_can_type->getASTContext());
-  SwiftEnumDescriptor *cached_enum_info =
-      ast->GetCachedEnumInfo(swift_can_type.getPointer());
-  if (!cached_enum_info)
-    return false;
-  auto enum_elem_info = cached_enum_info->GetElementFromData(data, true);
-  if (!enum_elem_info)
-    return false;
-  if (name)
-    *name = enum_elem_info->name;
-  if (has_payload)
-    *has_payload = enum_elem_info->has_payload;
-  if (payload)
-    *payload = enum_elem_info->payload_type;
-  if (is_indirect)
-    *is_indirect = enum_elem_info->is_indirect;
-  return true;
+  // FIXME: Have to get to this from the SwiftLangaugeRuntime.
+  return false;
 }
 
 lldb::GenericKind
@@ -7737,23 +7152,8 @@ bool SwiftASTContext::DumpTypeValue(
                        bitfield_bit_size, bitfield_bit_offset, exe_scope,
                        is_base_class);
   case swift::TypeKind::Enum:
-  case swift::TypeKind::BoundGenericEnum: {
-    SwiftEnumDescriptor *cached_enum_info = GetCachedEnumInfo(type);
-    if (cached_enum_info) {
-      auto enum_elem_info = cached_enum_info->GetElementFromData(data, true);
-      if (enum_elem_info)
-        s->Printf("%s", enum_elem_info->name.GetCString());
-      else {
-        lldb::offset_t ptr = 0;
-        if (data.GetByteSize())
-          s->Printf("<invalid> (0x%" PRIx8 ")", data.GetU8(&ptr));
-        else
-          s->Printf("<empty>");
-      }
-      return true;
-    } else
-      s->Printf("<unknown type>");
-  } break;
+  case swift::TypeKind::BoundGenericEnum:
+    return false;
 
   case swift::TypeKind::Struct:
   case swift::TypeKind::Protocol:

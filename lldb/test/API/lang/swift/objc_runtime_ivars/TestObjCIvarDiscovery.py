@@ -127,7 +127,7 @@ class TestObjCIVarDiscovery(TestBase):
         silly_x = silly.GetChildMemberWithName("x")
         silly_url = silly.GetChildMemberWithName("url")
 
-        self.assertTrue(silly_x.GetValueAsUnsigned() == 12, "x != 12")
+        self.assertEqual(silly_x.GetValueAsUnsigned(), 12, "x != 12")
         self.assertTrue(
             silly_url.GetSummary() == '"http://www.apple.com"',
             "url != apple.com")

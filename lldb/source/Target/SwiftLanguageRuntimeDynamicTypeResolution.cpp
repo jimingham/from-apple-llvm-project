@@ -473,10 +473,13 @@ public:
     }
   }
 
-  void pushLocalBuffer(uint64_t local_buffer, uint64_t local_buffer_size) {
+  void pushLocalBuffer(uint64_t &local_buffer, uint64_t local_buffer_size) {
     lldbassert(!m_local_buffer);
     m_local_buffer = local_buffer;
     m_local_buffer_size = local_buffer_size;
+    // Taint the address we were passed in so that if somebody uses it later
+    // we will recognize it...
+    local_buffer += 1;
   }
 
   void popLocalBuffer() {
@@ -501,14 +504,29 @@ SwiftLanguageRuntimeImpl::GetMemoryReader() {
   return m_memory_reader_sp;
 }
 
-void SwiftLanguageRuntimeImpl::PushLocalBuffer(uint64_t local_buffer,
+lldb::addr_t SwiftLanguageRuntimeImpl::PushLocalBuffer(uint64_t local_addr,
                                                uint64_t local_buffer_size) {
-  ((LLDBMemoryReader *)GetMemoryReader().get())
-      ->pushLocalBuffer(local_buffer, local_buffer_size);
+  DataExtractor buffer((void *) local_addr, local_buffer_size, 
+      m_process.GetByteOrder(), m_process.GetAddressByteSize());
+  Status error;
+  lldb::addr_t remote_addr = m_process.AllocateMemory(local_buffer_size, 
+    lldb::ePermissionsReadable, error);
+  if (!error.Success())
+    return LLDB_INVALID_ADDRESS;
+  size_t bytes_written = m_process.WriteMemory(remote_addr, 
+                                               buffer.GetDataStart(),
+                                               local_buffer_size, error);
+  if (!error.Success() || bytes_written != local_buffer_size)
+    return LLDB_INVALID_ADDRESS;
+  m_pushed_buffers.insert({remote_addr, local_buffer_size});
+  return remote_addr;
 }
 
-void SwiftLanguageRuntimeImpl::PopLocalBuffer() {
-  ((LLDBMemoryReader *)GetMemoryReader().get())->popLocalBuffer();
+void SwiftLanguageRuntimeImpl::PopLocalBuffer(lldb::addr_t remote_addr) {
+  auto element = m_pushed_buffers.find(remote_addr);
+  if (element == m_pushed_buffers.end())
+    llvm_unreachable("Unknown buffer in PopLocalBuffer");
+  m_process.DeallocateMemory((*element).first); 
 }
 
 SwiftLanguageRuntime::MetadataPromise::MetadataPromise(
@@ -1197,13 +1215,22 @@ static llvm::StringRef GetBaseName(swift::Demangle::NodePointer node) {
 }
 
 static CompilerType
-GetTypeFromTypeRef(TypeSystemSwiftTypeRef &ts,
+GetTypeFromTypeRef(TypeSystem &ts,
                    const swift::reflection::TypeRef *type_ref) {
   if (!type_ref)
     return {};
+
   swift::Demangle::Demangler dem;
   swift::Demangle::NodePointer node = type_ref->getDemangling(dem);
-  return ts.RemangleAsType(dem, node);
+  auto *ts_typeref = llvm::dyn_cast_or_null<TypeSystemSwiftTypeRef>(&ts);
+  if (ts_typeref)
+    return ts_typeref->RemangleAsType(dem, node);
+  auto *ast_type_system = llvm::dyn_cast_or_null<SwiftASTContext>(&ts);
+  if (ast_type_system) {
+      return ast_type_system->GetTypeRefTypeSystem()->RemangleAsType(dem, node);
+  }
+  // If this isn't a Swift typesystem we aren't going to be able to get a type.
+  return {};
 }
 
 static llvm::Optional<size_t>
@@ -1251,8 +1278,11 @@ llvm::Optional<std::string> SwiftLanguageRuntimeImpl::GetEnumCaseName(
     return {};
 
   auto *eti = llvm::cast<EnumTypeInfo>(ti);
-  PushLocalBuffer((int64_t)data.GetDataStart(), data.GetByteSize());
-  auto defer = llvm::make_scope_exit([&] { PopLocalBuffer(); });
+  uint64_t start_addr = (uint64_t) data.GetDataStart();
+  lldb::addr_t remote_addr = PushLocalBuffer(start_addr, data.GetByteSize());
+  auto defer = llvm::make_scope_exit([remote_addr, this] { 
+    PopLocalBuffer(remote_addr);
+  });
   RemoteAddress addr(data.GetDataStart());
   int case_index;
   if (eti->projectEnumValue(*GetMemoryReader(), addr, &case_index))
@@ -1581,6 +1611,102 @@ CompilerType SwiftLanguageRuntimeImpl::GetChildCompilerTypeAtIndex(
   return {};
 }
 
+bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(
+    ValueObject &valobj, 
+    SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info,
+    Status &error) {
+  CompilerType enum_type = valobj.GetCompilerType();
+  if (!enum_type) {
+    error.SetErrorStringWithFormatv("Invalid type for valobj: {0}", 
+                                    valobj.GetName());
+    return false;
+  }
+
+  auto *reflection_ctx = GetReflectionContext();
+  if (!reflection_ctx) {
+    error.SetErrorStringWithFormatv("Could not get reflection context for {0}",
+                                    valobj.GetName());
+    return false;
+  }
+
+  ExecutionContextScope *scope 
+    = valobj.GetExecutionContextRef().Lock(true).GetBestExecutionContextScope();
+  auto *type_info = GetTypeInfo(enum_type, scope);
+  if (!type_info ||
+      type_info->getKind() == swift::reflection::TypeInfoKind::Invalid) {
+    error.SetErrorStringWithFormatv("Did not get a valid TypeInfo for {0}",
+                                    valobj.GetName());
+    return false;
+  }
+  auto enum_type_info 
+      = llvm::dyn_cast_or_null<swift::reflection::EnumTypeInfo>(type_info);
+  if (!enum_type_info) {
+    error.SetErrorStringWithFormatv("Called GetCurrentEnumValue on a value "
+                                    "that wasn't an enum: {0}", 
+                                    valobj.GetName());
+    return false;
+  }
+  
+  enum_info.is_optional = enum_type_info->isOptional();
+
+  int case_idx;
+  AddressType addr_type;
+  lldb::addr_t addr = valobj.GetAddressOf(true, &addr_type);
+  if (addr == LLDB_INVALID_ADDRESS) {
+    error.SetErrorStringWithFormatv("Can't get current enum value for {0}: c"
+                                    "an't find its location", valobj.GetName());
+    return false;
+  }
+
+  if (addr_type == eAddressTypeFile) {
+    error.SetErrorStringWithFormatv("Can't get current enum value for {0}:"
+                                    " its a file address", valobj.GetName());
+    return false;
+  }
+  
+  lldb::addr_t remote_addr = addr;
+  if (addr_type == eAddressTypeHost) {
+    unsigned enum_size = enum_type_info->getSize();
+    remote_addr = PushLocalBuffer(addr, enum_size);
+  }
+  bool success 
+      = enum_type_info->projectEnumValue(reflection_ctx->getReader(),
+                                         swift::reflection::RemoteAddress(remote_addr), 
+                                         &case_idx);
+  if (addr_type == eAddressTypeHost)
+    PopLocalBuffer(remote_addr);
+
+  if (!success) {
+    error.SetErrorStringWithFormatv("projectEnumValue failed using {0} address: {1}"
+                                    " for {2}", 
+                                    addr_type == eAddressTypeLoad ? 
+                                        "load" : "host", 
+                                    addr, valobj.GetName());
+    return false;
+  }
+  swift::reflection::FieldInfo current_case 
+      = enum_type_info->getCases()[case_idx];
+  enum_info.case_name = current_case.Name;
+  enum_info.case_offset = current_case.Offset;
+  enum_info.case_length = current_case.TI.getSize();
+  enum_info.has_payload = current_case.TR != 0;
+  if (enum_info.has_payload) {
+    CompilerType case_type = GetTypeFromTypeRef(*enum_type.GetTypeSystem(), 
+                                             current_case.TR);
+    if (case_type.IsValid()) {
+      enum_info.case_type = case_type;
+      return true;
+    } else {
+      error.SetErrorStringWithFormatv("projectEnumValue failed to get a "
+                                      "CompilerType for case {0} from {1}",
+                                      enum_info.case_name, valobj.GetName());
+      return false;
+    }
+  }
+  return true;                                                   
+}
+
+
 bool SwiftLanguageRuntimeImpl::ForEachSuperClassType(
     ValueObject &instance, std::function<bool(SuperClassType)> fn) {
   auto *reflection_ctx = GetReflectionContext();
@@ -1833,15 +1959,19 @@ bool SwiftLanguageRuntimeImpl::GetDynamicTypeAndAddress_Protocol(
   if (!existential_address || existential_address == LLDB_INVALID_ADDRESS)
     return false;
 
-  if (use_local_buffer)
-    PushLocalBuffer(existential_address, in_value.GetByteSize().getValueOr(0));
-
+  // FIXME: Use the fake push & pop local buffers.  I think this may be reading a scalar
+  // and not memory but I don't follow the code yet.
+  if (use_local_buffer) {
+    ((LLDBMemoryReader *)GetMemoryReader().get())
+      ->pushLocalBuffer(existential_address, in_value.GetByteSize()); 
+  }
+  
   swift::remote::RemoteAddress remote_existential(existential_address);
   auto result = remote_ast.getDynamicTypeAndAddressForExistential(
       remote_existential, GetSwiftType(protocol_type));
 
   if (use_local_buffer)
-    PopLocalBuffer();
+    ((LLDBMemoryReader *)GetMemoryReader().get())->popLocalBuffer(); 
 
   if (!result.isSuccess()) {
     if (log)

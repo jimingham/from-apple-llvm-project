@@ -275,6 +275,19 @@ public:
       uint32_t &child_bitfield_bit_offset, bool &child_is_base_class,
       bool &child_is_deref_of_parent, ValueObject *valobj,
       uint64_t &language_flags);
+      
+  // Given a ValueObject, if it is a swift enum, return the name and type of
+  // the currently selected variant.
+  struct SwiftEnumValueInfo {
+    std::string case_name;
+    CompilerType case_type;
+    lldb::addr_t case_offset = LLDB_INVALID_ADDRESS;
+    lldb::addr_t case_length = 0;
+    bool is_optional = false;
+    bool has_payload = false;
+  };
+  bool GetCurrentEnumValue(ValueObject &valobj, SwiftEnumValueInfo &enum_info,
+                           Status &error);
 
   /// Ask Remote Mirrors about the fields of a composite type.
   llvm::Optional<unsigned> GetNumFields(CompilerType type,
