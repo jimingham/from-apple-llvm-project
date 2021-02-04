@@ -107,7 +107,8 @@ public:
       // figuring that out?
     return {};
   }
-  uint64_t GetByteSize() override { return 0; }
+  llvm::Optional<uint64_t> GetByteSize() override { return 0; }
+
   lldb::ValueType GetValueType() const override {
     return eValueTypeConstResult;
   }

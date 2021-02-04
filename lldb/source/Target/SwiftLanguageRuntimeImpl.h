@@ -247,14 +247,22 @@ protected:
 
   std::shared_ptr<swift::remote::MemoryReader> GetMemoryReader();
 
-  // Pushes local_buffer onto the target so it's available for reflection.
-  // Returns the address of the remote buffer.
-  lldb::addr_t PushLocalBuffer(uint64_t local_addr, uint64_t local_buffer_size);
+  // Shadow remote addresses with a local buffer to make them available to
+  // Reflection.
+  void PushLocalBuffer(uint64_t local_addr, uint64_t local_buffer_size);
 
-  // Pop the remote buffer at the address PushLocalBuffer returned above.
-  void PopLocalBuffer(lldb::addr_t remote_addr);
-  // This stores the buffers we've pushed down to the target in PushLocalBuffer,
-  // and their sizes, so that we can deallocate them in PopLocalBuffer.
+  // Pop the latest shadowing buffer.
+  void PopLocalBuffer();
+  
+  // Copies the data in local_data onto the target so it is actually readable
+  // by reflection.  Returns the remote address of the data
+  lldb::addr_t PushLocalData(const DataExtractor &local_data, Status &error);
+  
+  // Pops the local data copied to the remote addr returned from PushLocalData.
+  void PopLocalData(lldb::addr_t remote_addr);
+
+  // This stores the buffers we've pushed down to the target in PushLocalData,
+  // and their sizes, so that we can deallocate them in PopLocalData.
   std::unordered_map<lldb::addr_t, uint64_t> m_pushed_buffers;
 
   /// We have to load swift dependent libraries by hand, but if they
