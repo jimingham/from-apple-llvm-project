@@ -670,7 +670,6 @@ SwiftLanguage::GetHardcodedSummaries() {
                               lldb::DynamicValueType, FormatManager &)
                                -> TypeSummaryImpl::SharedPointer {
       static lldb::TypeSummaryImplSP swift_enum_summary_sp(nullptr);
-      CompilerType clang_type(valobj.GetCompilerType());
       CompilerType type(valobj.GetCompilerType());
       Flags type_flags(type.GetTypeInfo());
       if (type_flags.AllSet(eTypeIsSwift | eTypeIsEnumeration)) {
@@ -683,10 +682,8 @@ SwiftLanguage::GetHardcodedSummaries() {
               .SetShowMembersOneLiner(false)
               .SetSkipPointers(false)
               .SetSkipReferences(false);
-          swift_enum_summary_sp.reset(new CXXFunctionSummaryFormat(
-              flags,
-              lldb_private::formatters::swift::SwiftEnum_SummaryProvider,
-              "Swift Enum Summary"));
+          swift_enum_summary_sp.reset(
+            new formatters::swift::SwiftEnumCXXSummaryFormat(flags));
         }
         return swift_enum_summary_sp;
       }
@@ -704,29 +701,6 @@ SwiftLanguage::GetHardcodedSynthetics() {
   static HardcodedFormatters::HardcodedSyntheticFinder g_formatters;
 
   std::call_once(g_initialize, []() -> void {
-    g_formatters.push_back([](lldb_private::ValueObject &valobj,
-                              lldb::DynamicValueType,
-                              FormatManager &) -> lldb::SyntheticChildrenSP {
-      static lldb::SyntheticChildrenSP swift_enum_synth(nullptr);
-      CompilerType type(valobj.GetCompilerType());
-      Flags type_flags(type.GetTypeInfo());
-      if (type_flags.AllSet(eTypeIsSwift | eTypeIsEnumeration)) {
-//        // FIXME: The classification of clang-imported enums may
-//        // change based on whether a Swift module is present or not.
-//        if (!valobj.GetValueAsCString())
-//          return nullptr;
-        if (!swift_enum_synth)
-          swift_enum_synth = lldb::SyntheticChildrenSP(new CXXSyntheticChildren(
-              SyntheticChildren::Flags()
-                  .SetCascades(true)
-                  .SetSkipPointers(true)
-                  .SetSkipReferences(true),
-              "swift Enum synthetic children provider",
-              lldb_private::formatters::swift::EnumSyntheticFrontEndCreator));
-        return swift_enum_synth;
-      }
-      return nullptr;
-    });
     g_formatters.push_back(
         [](lldb_private::ValueObject &valobj, lldb::DynamicValueType dyn_type,
            FormatManager &format_manager) -> lldb::SyntheticChildrenSP {
@@ -822,6 +796,37 @@ SwiftLanguage::GetHardcodedSynthetics() {
           }
           return nullptr;
         });
+    g_formatters.push_back([](lldb_private::ValueObject &valobj,
+                              lldb::DynamicValueType,
+                              FormatManager &) -> lldb::SyntheticChildrenSP {
+      static lldb::SyntheticChildrenSP swift_enum_synth(nullptr);
+      CompilerType type(valobj.GetCompilerType());
+      Flags type_flags(type.GetTypeInfo());
+      if (type_flags.AllSet(eTypeIsSwift | eTypeIsEnumeration)) {
+        // Enums imported from C or ObjC are not handled by the reflection
+        // enum introspection, and this isn't how we format them:
+        ProcessSP process_sp(valobj.GetProcessSP());
+        if (!process_sp)
+          return nullptr;
+        auto *swift_runtime = SwiftLanguageRuntime::Get(process_sp);
+        if (!swift_runtime)
+          return nullptr;
+        if (!swift_runtime->IsSwiftEnum(valobj))
+          return nullptr;
+
+        if (!swift_enum_synth)
+          swift_enum_synth = lldb::SyntheticChildrenSP(new CXXSyntheticChildren(
+              SyntheticChildren::Flags()
+                  .SetCascades(true)
+                  .SetSkipPointers(true)
+                  .SetSkipReferences(true),
+              "swift Enum synthetic children provider",
+              lldb_private::formatters::swift::EnumSyntheticFrontEndCreator));
+        return swift_enum_synth;
+      }
+      return nullptr;
+    });
+
   });
 
   return g_formatters;

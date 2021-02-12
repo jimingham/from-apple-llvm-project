@@ -1,5 +1,7 @@
 enum x : String {
   case patatino
+  case chips
+  case salsa
 }
 
 struct y {

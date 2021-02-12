@@ -1287,14 +1287,19 @@ llvm::Optional<std::string> SwiftLanguageRuntimeImpl::GetEnumCaseName(
 
   Status error;
   auto *eti = llvm::cast<EnumTypeInfo>(ti);
+  // Don't print the case names for Optionals.
+  if (eti->isOptional())
+    return {};
+
   lldb::addr_t remote_addr = PushLocalData(data, error);
   auto defer = llvm::make_scope_exit([remote_addr, this] { 
     PopLocalData(remote_addr);
   });
   RemoteAddress addr(remote_addr);
   int case_index;
-  if (eti->projectEnumValue(*GetMemoryReader(), addr, &case_index))
+  if (eti->projectEnumValue(*GetMemoryReader(), addr, &case_index)) {
     return eti->getCases()[case_index].Name;
+  }
 
   // Temporary workaround.
   if (eti->getEnumKind() == EnumKind::MultiPayloadEnum &&
@@ -1617,6 +1622,25 @@ CompilerType SwiftLanguageRuntimeImpl::GetChildCompilerTypeAtIndex(
             "Cannot retrieve type information for %s",
             type.GetTypeName().AsCString());
   return {};
+}
+
+bool SwiftLanguageRuntimeImpl::IsSwiftEnum(ValueObject &valobj) {
+  CompilerType enum_type = valobj.GetCompilerType();
+  
+  if (!enum_type)
+    return false;
+
+  ExecutionContextScope *scope 
+    = valobj.GetExecutionContextRef().Lock(true).GetBestExecutionContextScope();
+  auto *type_info = GetTypeInfo(enum_type, scope);
+  if (!type_info ||
+      type_info->getKind() == swift::reflection::TypeInfoKind::Invalid)
+    return false;
+  auto enum_type_info 
+      = llvm::dyn_cast_or_null<swift::reflection::EnumTypeInfo>(type_info);
+  if (!enum_type_info)
+    return false;
+  return true;
 }
 
 bool SwiftLanguageRuntimeImpl::GetCurrentEnumValue(

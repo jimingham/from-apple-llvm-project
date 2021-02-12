@@ -23,6 +23,13 @@ namespace swift {
 bool SwiftEnum_SummaryProvider(
     ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
 
+struct SwiftEnumCXXSummaryFormat : CXXFunctionSummaryFormat {
+
+  SwiftEnumCXXSummaryFormat(const TypeSummaryImpl::Flags &flags);
+
+    bool DoesPrintValue(ValueObject *valobj) const override; 
+};
+
 class EnumSyntheticFrontEnd : public SyntheticChildrenFrontEnd {
 public:
   EnumSyntheticFrontEnd(lldb::ValueObjectSP valobj_sp);
@@ -48,7 +55,6 @@ private:
   lldb::addr_t m_element_offset;
   lldb::addr_t m_element_length;
   bool m_is_optional;
-  bool m_has_payload;
   bool m_is_valid;
   lldb::ValueObjectSP m_current_payload_sp;
   lldb::ValueObjectSP m_current_case_sp;

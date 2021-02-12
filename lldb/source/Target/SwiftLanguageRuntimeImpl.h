@@ -139,6 +139,8 @@ public:
       uint32_t &child_bitfield_bit_offset, bool &child_is_base_class,
       bool &child_is_deref_of_parent, ValueObject *valobj,
       uint64_t &language_flags);
+      
+  bool IsSwiftEnum(ValueObject &valobj);
   
   bool GetCurrentEnumValue(ValueObject &valobj, 
                            SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info, 

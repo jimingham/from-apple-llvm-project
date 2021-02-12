@@ -686,7 +686,7 @@ ValueObjectSP ValueObjectPrinter::GenerateChild(ValueObject *synth_valobj,
 void ValueObjectPrinter::PrintChildren(
     bool value_printed, bool summary_printed,
     const DumpValueObjectOptions::PointerDepth &curr_ptr_depth) {
-  ValueObject *synth_m_valobj = GetValueObjectForChildrenGeneration();
+  ValueObject *synth_m_valobj = GetValueObjectForChildrenGeneration();  // FIXME: This isn't necessarily a synth valobj.  It's just what we are getting children from.
 
   bool print_dotdotdot = false;
   size_t num_children = GetMaxNumChildrenToPrint(print_dotdotdot);

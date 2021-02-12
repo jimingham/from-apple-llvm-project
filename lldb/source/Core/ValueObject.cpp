@@ -2819,8 +2819,9 @@ ValueObjectSP ValueObject::GetQualifiedRepresentationIfAvailable(
 
   if (synthValue) {
     if (!result_sp->IsSynthetic()) {
-      if (result_sp->GetSyntheticValue())
-        result_sp = result_sp->GetSyntheticValue();
+      ValueObjectSP synth_sp = result_sp->GetSyntheticValue();
+      if (synth_sp)
+        result_sp = synth_sp;
     }
   } else {
     if (result_sp->IsSynthetic()) {

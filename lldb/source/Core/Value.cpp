@@ -205,6 +205,12 @@ uint64_t Value::GetValueByteSize(Status *error_ptr, ExecutionContext *exe_ctx) {
     break;
 
   case eContextTypeInvalid:
+    // If the compiler type is "invalid" then the only way this could have
+    // data is if it is in the data extractor already.  Return the size of that.
+    if (!GetCompilerType().IsValid()) {
+      return m_data_buffer.GetByteSize();    
+    }
+    [[clang::fallthrough]]; 
   case eContextTypeLLDBType: // Type *
   case eContextTypeVariable: // Variable *
   {
@@ -473,6 +479,7 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
     // fallback to host settings
     data.SetByteOrder(endian::InlHostByteOrder());
     data.SetAddressByteSize(sizeof(void *));
+    
     break;
   }
 

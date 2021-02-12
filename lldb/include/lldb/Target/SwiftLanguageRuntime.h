@@ -275,7 +275,12 @@ public:
       uint32_t &child_bitfield_bit_offset, bool &child_is_base_class,
       bool &child_is_deref_of_parent, ValueObject *valobj,
       uint64_t &language_flags);
-      
+  
+  // Enums that are imported from C or ObjC aren't handled by the TypeRef system
+  // as swift::reflection::EnumTypeInfo types, and can't be handled by the
+  // Swift Enum summary & synthetic child providers.
+  bool IsSwiftEnum(ValueObject &valobj);
+  
   // Given a ValueObject, if it is a swift enum, return the name and type of
   // the currently selected variant.
   struct SwiftEnumValueInfo {

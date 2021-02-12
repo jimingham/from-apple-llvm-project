@@ -299,6 +299,11 @@ public:
     return false;
   }
 
+  bool IsSwiftEnum(ValueObject &valobj) {
+    STUB_LOG();
+    return false;
+  }
+
   bool GetObjectDescription(Stream &str, ValueObject &object) {
     STUB_LOG();
     return false;
@@ -2219,6 +2224,10 @@ llvm::Optional<unsigned>
 SwiftLanguageRuntime::GetNumFields(CompilerType type,
                                    ExecutionContext *exe_ctx) {
   FORWARD(GetNumFields, type, exe_ctx);
+}
+
+bool SwiftLanguageRuntime::IsSwiftEnum(ValueObject &valobj) {
+  FORWARD(IsSwiftEnum, valobj);                                               
 }
 
 bool SwiftLanguageRuntime::GetCurrentEnumValue(

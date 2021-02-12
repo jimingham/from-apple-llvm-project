@@ -22,6 +22,8 @@
 #include "swift/../../lib/IRGen/IRGenModule.h"
 #include "swift/../../lib/IRGen/TypeInfo.h"
 
+#include "ObjCRuntimeSyntheticProvider.h"
+
 #include "Plugins/Language/Swift/SwiftEnum.h"
 #include "Plugins/TypeSystem/Swift/SwiftASTContext.h"
 #include "lldb/Core/ValueObject.h"
@@ -79,35 +81,30 @@ private:
 class ValueObjectSwiftEnumCase : public ValueObject {
 public:
   static ValueObjectSP Create(ExecutionContextScope *exe_scope, 
-                              llvm::StringRef case_name) {
+                              std::string &case_name) {
     auto manager_sp = ValueObjectManager::Create();
     ValueObject *ret_ptr = new ValueObjectSwiftEnumCase(exe_scope, 
                                                       *manager_sp, case_name);
     std::shared_ptr<SwiftEnumCaseSummaryProvider> summary_impl_sp(new
         SwiftEnumCaseSummaryProvider(case_name));
     ret_ptr->SetSummaryFormat(summary_impl_sp);
+    // The name isn't significant, but it helps when debugging.
+    //ret_ptr->SetName(ConstString(case_name));
     return ret_ptr->GetSP();
-  }
-  
-  ValueObjectSwiftEnumCase(ExecutionContextScope *exe_scope, 
-                           ValueObjectManager &manager, 
-                           llvm::StringRef case_name) :
-      ValueObject(exe_scope, manager), m_case_name(case_name) {
-    SetIsConstant();
-    SetValueIsValid(true);
   }
   
   virtual ~ValueObjectSwiftEnumCase() {
   }
   
   bool UpdateValue() override { return true; }
+  
   size_t CalculateNumChildren(uint32_t max = UINT32_MAX) override { return 0; }
   CompilerType GetCompilerTypeImpl() override { 
       // How are these represented in the swift typesystem, is it worth 
       // figuring that out?
     return {};
   }
-  llvm::Optional<uint64_t> GetByteSize() override { return 0; }
+  llvm::Optional<uint64_t> GetByteSize() override { return m_case_name.size() + 1; }
 
   lldb::ValueType GetValueType() const override {
     return eValueTypeConstResult;
@@ -117,48 +114,21 @@ public:
     return eLanguageTypeSwift;
   }
   
-  bool CanProvideValue() override { return false; };
-
-  const char *GetValueAsCString() override {
-    return nullptr;
-  }
-  
-  // FIXME - not sure I need this one...
-  bool GetValueAsCString(const lldb_private::TypeFormatImpl &format,
-                                 std::string &destination) override {
-    return false;
-  }
-  
-  uint64_t GetValueAsUnsigned(uint64_t fail_value, bool *success = nullptr)
-      override {
-      if (success) *success = false;
-      return fail_value;
-  }
-
-  int64_t GetValueAsSigned(int64_t fail_value, bool *success = nullptr)
-      override {
-      if (success) *success = false;
-      return fail_value;
-  }
-  
-  bool SetValueFromCString(const char *value_str, Status &error) override {
-    error.SetErrorString("Swift case value objects can't be changed.");
-    return false;
-  }
-  
-  lldb::addr_t GetAddressOf(bool scalar_is_load_address = true,
-                            AddressType *address_type = nullptr) override {
-    return LLDB_INVALID_ADDRESS;
-  }
-  
-  lldb::ValueObjectSP GetDynamicValue(lldb::DynamicValueType value_type)
-      override {
-    return {};
-  }
+  bool CanProvideValue() override { return true; };
   
   bool HasSyntheticValue() override { return false; }
 
 private:
+  ValueObjectSwiftEnumCase(ExecutionContextScope *exe_scope, 
+                           ValueObjectManager &manager, 
+                           llvm::StringRef case_name) :
+      ValueObject(exe_scope, manager), m_case_name(case_name) {
+    SetIsConstant();
+    // Our value is the m_case_name, so we have to set that value:
+    m_value.SetBytes(m_case_name.c_str(), m_case_name.size() + 1);
+    SetValueIsValid(true);
+  }
+  
     std::string m_case_name;
 };
 
@@ -169,22 +139,24 @@ lldb_private::formatters::swift::EnumSyntheticFrontEnd::EnumSyntheticFrontEnd(
     : SyntheticChildrenFrontEnd(*valobj_sp.get()), m_exe_ctx_ref(),
       m_element_name(), m_element_offset(LLDB_INVALID_ADDRESS),
       m_element_length(LLDB_INVALID_ADDRESS), m_is_optional(false),
-      m_has_payload(false), m_is_valid(false) {
+      m_is_valid(false) {
   if (valobj_sp)
     Update();
 }
 
 size_t
 lldb_private::formatters::swift::EnumSyntheticFrontEnd::CalculateNumChildren() {
-  if (m_has_payload && m_current_payload_sp)
+  if (m_current_payload_sp)
     return m_current_payload_sp->GetNumChildren();
+  if (m_current_case_sp)
+    return 1;
   return 0;
 }
 
 lldb::ValueObjectSP 
 lldb_private::formatters::swift::EnumSyntheticFrontEnd::GetSyntheticValue() {
   if (m_current_payload_sp) return m_current_payload_sp;
-  //if (m_current_case_sp) return m_current_case_sp;
+  if (m_current_case_sp) return m_current_case_sp;
   return {};
 }
 
@@ -195,6 +167,12 @@ lldb_private::formatters::swift::EnumSyntheticFrontEnd::GetChildAtIndex(
     return {};
   else if (m_current_payload_sp)
     return m_current_payload_sp->GetChildAtIndex(idx, true);
+  else if (m_current_case_sp) {
+    if (idx == 0)
+      return m_current_case_sp;
+    else
+      return {};
+  }
   else
     return {};
 }
@@ -205,6 +183,7 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::Update() {
   m_current_case_sp.reset();
   m_is_valid = false;
   m_backend.SetSummaryFormat({});
+  m_backend.SetSyntheticChildrenGenerated(true);
   
   m_exe_ctx_ref = m_backend.GetExecutionContextRef();
   ProcessSP process_sp = m_exe_ctx_ref.GetProcessSP();
@@ -229,28 +208,23 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::Update() {
   m_element_offset = enum_info.case_offset;
   m_element_length = enum_info.case_length;
   m_is_optional = enum_info.is_optional;
-  m_has_payload = enum_info.has_payload;
   
-  // Now insert our summary provider into the backend:
-  std::shared_ptr<SwiftEnumCaseSummaryProvider> summary_impl_sp(new
-        SwiftEnumCaseSummaryProvider(m_element_name));
-  m_backend.SetSummaryFormat(summary_impl_sp);
-
-
   // If we don't have a payload return a node that represents the selected
   // case:
-  if (!m_has_payload) {
+  if (!enum_info.has_payload) {
     m_is_valid = true;
     // Don't produce an enum leaf node for empty optionals, since we don't
-    // want to show a value of "nil".
-    if (!(m_is_optional && m_element_name == "none")) {
-      std::string case_name;
-      case_name = ".";
-      case_name.append(m_element_name);
-      m_current_case_sp = ValueObjectSwiftEnumCase::Create(process_sp.get(),
-                                                         case_name);
-      m_current_case_sp->SetSyntheticChildrenGenerated(true);
-    }
+    // want to show a value of "nil", we just want to have no children and
+    // let the summary take over.
+    if (m_is_optional)
+      return true;
+
+    std::string case_name;
+    case_name = ".";
+    case_name.append(m_element_name);
+    m_current_case_sp = ValueObjectSwiftEnumCase::Create(process_sp.get(),
+                                                       case_name);
+    m_current_case_sp->SetSyntheticChildrenGenerated(true);
     return true;
   }
 
@@ -267,15 +241,45 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::Update() {
   DataExtractor element_data(backend_data, m_element_offset, m_element_length);
   m_current_payload_sp 
       = CreateValueObjectFromData(m_element_name.c_str(), element_data, 
-                                  m_backend.GetExecutionContextRef(), 
-                                  m_element_type);
+                                    m_backend.GetExecutionContextRef(), 
+                                    m_element_type);
   if (!m_current_payload_sp) {
     m_is_valid = false;
     return false;
   }
-  if (m_current_payload_sp->GetSyntheticValue())
-    m_current_payload_sp = m_current_payload_sp->GetSyntheticValue();
 
+  m_current_payload_sp->SetSyntheticChildrenGenerated(true);
+
+  // Now insert our summary provider into the backend:
+  std::shared_ptr<SwiftEnumCaseSummaryProvider> summary_impl_sp(new
+        SwiftEnumCaseSummaryProvider(m_element_name));
+  m_backend.SetSummaryFormat(summary_impl_sp);
+
+  // One more step here.  If we are an optional with a value of "some"
+  // and our current value is another enum with no payload, make the enum case
+  // our value.
+  if (m_is_optional && m_current_payload_sp) {
+    runtime->GetCurrentEnumValue(*m_current_payload_sp.get(), enum_info, error);
+    if (error.Success() && !enum_info.has_payload) {
+      m_current_payload_sp.reset();
+      std::string case_name;
+      case_name = ".";
+      case_name.append(enum_info.case_name);
+      m_current_case_sp = ValueObjectSwiftEnumCase::Create(process_sp.get(),
+                                                         case_name);
+      m_current_case_sp->SetSyntheticChildrenGenerated(true);
+      return true;
+    }
+  }
+
+  // We want to hand out the best version of this ValueObject we can, so compute
+  // that here.
+  // FIXME: we have to force eDynamicDontRunTarget here or the ObjC bridge
+  // formatters don't trigger correctly.
+  m_current_payload_sp 
+      = m_current_payload_sp
+          ->GetQualifiedRepresentationIfAvailable(eDynamicDontRunTarget, true);
+  
   return true;
 }
 
@@ -283,11 +287,9 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::
     MightHaveChildren() {
   if (!m_is_valid)
     return false;
-  else if (!m_has_payload)
-    return false;
-  else if (m_current_case_sp)
+  if (m_current_case_sp)
     return true;
-  else if (m_current_payload_sp)
+  if (m_current_payload_sp)
     return m_current_payload_sp->MightHaveChildren();
   return false;
 }
@@ -296,9 +298,11 @@ bool lldb_private::formatters::swift::EnumSyntheticFrontEnd::
 size_t
 lldb_private::formatters::swift::EnumSyntheticFrontEnd::GetIndexOfChildWithName(
     ConstString name) {
-  if (!m_has_payload || !m_current_payload_sp)
-    return UINT32_MAX;
-  return m_current_payload_sp->GetIndexOfChildWithName(name);
+  if (m_current_payload_sp)
+    return m_current_payload_sp->GetIndexOfChildWithName(name);
+  if (m_current_case_sp)
+    return m_current_case_sp->GetIndexOfChildWithName(name);
+  return UINT32_MAX;
 }
 
 SyntheticChildrenFrontEnd *
@@ -306,6 +310,7 @@ lldb_private::formatters::swift::EnumSyntheticFrontEndCreator(
     CXXSyntheticChildren *, lldb::ValueObjectSP valobj_sp) {
   if (!valobj_sp)
     return NULL;
+
   return (new EnumSyntheticFrontEnd(valobj_sp));
 }
 
@@ -314,29 +319,52 @@ lldb_private::formatters::swift::EnumSyntheticFrontEndCreator(
 // YES, I make this in Update, so when I do that, I should be able to pass in
 // everything I learned there.
 
-bool lldb_private::formatters::swift::SwiftEnum_SummaryProvider(
-    ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options) {
-  ConstString elem_name;
-  
+static Status GetCurrentEnumValue(ValueObject &valobj, 
+        SwiftLanguageRuntime::SwiftEnumValueInfo &enum_info) {
   ExecutionContextRef exe_ctx_ref = valobj.GetExecutionContextRef();
   ProcessSP process_sp = exe_ctx_ref.GetProcessSP();
+  Status error;
   if (!process_sp) {
-    stream.PutCString("<unknown:no process>");
-    return false;
+    error.SetErrorString("no process");
+    return error;
   }
   SwiftLanguageRuntime *runtime = SwiftLanguageRuntime::Get(process_sp.get());
   if (!runtime) {
-    stream.PutCString("<unknown: no runtime>");
-    return false;
+    error.SetErrorString("no swift runtime");
+    return error;
   }
-  Status error;
   
+  runtime->GetCurrentEnumValue(valobj, enum_info, error);
+  return error;
+}
+
+bool formatters::swift::SwiftEnumCXXSummaryFormat::DoesPrintValue(ValueObject *valobj) const  {
+  if (!valobj)
+    return false;
+    
   SwiftLanguageRuntime::SwiftEnumValueInfo enum_info;
-  bool success = runtime->GetCurrentEnumValue(valobj, enum_info,
-                                              error);
-  if (!success) {
+  Status error = GetCurrentEnumValue(*valobj, enum_info);
+  if (!error.Success())
+    return false;
+  if (enum_info.is_optional)
+    return false;
+  else
+    return true;
+}
+
+formatters::swift::SwiftEnumCXXSummaryFormat::SwiftEnumCXXSummaryFormat(
+    const TypeSummaryImpl::Flags &flags) :
+        CXXFunctionSummaryFormat(flags, 
+            lldb_private::formatters::swift::SwiftEnum_SummaryProvider, 
+            "Swift enum summary provider") {}
+
+bool lldb_private::formatters::swift::SwiftEnum_SummaryProvider(
+    ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options) {  
+  SwiftLanguageRuntime::SwiftEnumValueInfo enum_info;
+  Status error = GetCurrentEnumValue(valobj, enum_info);
+  if (!error.Success()) {
     stream.Printf("<could not fetch current value: %s>", error.AsCString());
-    return true; // We
+    return false;
   }
   
   if (enum_info.is_optional) {
