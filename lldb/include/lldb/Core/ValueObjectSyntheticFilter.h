@@ -106,12 +106,11 @@ public:
   lldb::ValueObjectSP
   GetSyntheticChildAtOffset(uint32_t offset, const CompilerType &type,
                             bool can_create,
-                            ConstString name = ConstString()) override {
-    if (m_parent)
-      return m_parent->GetSyntheticChildAtOffset(offset, type, can_create,
-                                                 name);
-    return nullptr;
-  }
+                            ConstString name = ConstString()) override;
+                            
+  bool GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
+                           std::string &destination,
+                           const TypeSummaryOptions &options) override;
 
   bool GetIsConstant() const override { return false; }
 

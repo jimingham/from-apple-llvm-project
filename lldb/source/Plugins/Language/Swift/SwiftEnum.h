@@ -20,14 +20,12 @@
 namespace lldb_private {
 namespace formatters {
 namespace swift {
-bool SwiftEnum_SummaryProvider(
-    ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options);
-
 struct SwiftEnumCXXSummaryFormat : CXXFunctionSummaryFormat {
 
   SwiftEnumCXXSummaryFormat(const TypeSummaryImpl::Flags &flags);
 
     bool DoesPrintValue(ValueObject *valobj) const override; 
+
 };
 
 class EnumSyntheticFrontEnd : public SyntheticChildrenFrontEnd {
@@ -44,7 +42,18 @@ public:
 
   size_t GetIndexOfChildWithName(ConstString name) override;
   
+  lldb::ValueObjectSP
+  GetSyntheticChildAtOffset(uint32_t offset, const CompilerType &type,
+                            bool can_create,
+                            ConstString name = ConstString()) override;
+  
+  bool GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
+                           std::string &destination,
+                           const TypeSummaryOptions &options) override;
+
   lldb::ValueObjectSP GetSyntheticValue() override;
+  
+  CompilerType GetCompilerTypeImpl() override;
 
   virtual ~EnumSyntheticFrontEnd() = default;
 

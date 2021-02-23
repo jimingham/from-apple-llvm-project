@@ -62,6 +62,12 @@ ValueObjectSynthetic::ValueObjectSynthetic(ValueObject &parent,
 ValueObjectSynthetic::~ValueObjectSynthetic() = default;
 
 CompilerType ValueObjectSynthetic::GetCompilerTypeImpl() {
+  if (m_synth_filter_up) {
+      CompilerType ret_type = m_synth_filter_up->GetCompilerTypeImpl();
+      if (ret_type.IsValid())
+        return ret_type;        
+  }
+
   return m_parent->GetCompilerType();
 }
 
@@ -206,16 +212,16 @@ bool ValueObjectSynthetic::UpdateValue() {
 
   m_provides_value = eLazyBoolCalculate;
 
-  lldb::ValueObjectSP synth_val(m_synth_filter_up->GetSyntheticValue());
+  lldb::ValueObjectSP synth_val_sp(m_synth_filter_up->GetSyntheticValue());
 
-  if (synth_val && synth_val->CanProvideValue()) {
+  if (synth_val_sp && synth_val_sp->CanProvideValue()) {
     LLDB_LOGF(log,
               "[ValueObjectSynthetic::UpdateValue] name=%s, synthetic "
               "filter said it can provide a value",
               GetName().AsCString());
 
     m_provides_value = eLazyBoolYes;
-    CopyValueData(synth_val.get());
+    CopyValueData(synth_val_sp.get());
   } else {
     LLDB_LOGF(log,
               "[ValueObjectSynthetic::UpdateValue] name=%s, synthetic "
@@ -341,6 +347,46 @@ size_t ValueObjectSynthetic::GetIndexOfChildWithName(ConstString name) {
     return UINT32_MAX;
   else /*if (iter != m_name_toindex.end())*/
     return found_index;
+}
+
+lldb::ValueObjectSP
+ValueObjectSynthetic::GetSyntheticChildAtOffset(uint32_t offset, const 
+                            CompilerType &type,
+                            bool can_create,
+                            ConstString name) {
+                            
+  // See if the synth filter can handle this, otherwise, direct to the parent.
+  if (m_synth_filter_up) {
+    lldb::ValueObjectSP filter_ret_sp 
+        = m_synth_filter_up->GetSyntheticChildAtOffset(offset, type,
+                                                       can_create, name);
+    if (filter_ret_sp)
+      return filter_ret_sp;        
+  }
+
+  if (m_parent)
+    return m_parent->GetSyntheticChildAtOffset(offset, type, can_create,
+                                               name);
+  return nullptr;
+}
+
+bool 
+ValueObjectSynthetic::GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
+                                          std::string &destination,
+                                          const TypeSummaryOptions &options) {
+  // See if the Synth Filter can handle the summary for this object.
+  bool ret_val = false;
+  if (m_synth_filter_up) {
+    ret_val = m_synth_filter_up->GetSummaryAsCString(summary_ptr, destination,
+                                                     options);
+    if (ret_val)
+      return ret_val;
+  }
+  
+  if (m_parent)
+    ret_val = m_parent->GetSummaryAsCString(summary_ptr, destination, options);
+
+  return ret_val;
 }
 
 bool ValueObjectSynthetic::IsInScope() { return m_parent->IsInScope(); }

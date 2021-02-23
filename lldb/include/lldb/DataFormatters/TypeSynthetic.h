@@ -48,6 +48,19 @@ public:
   virtual lldb::ValueObjectSP GetChildAtIndex(size_t idx) = 0;
 
   virtual size_t GetIndexOfChildWithName(ConstString name) = 0;
+  
+  virtual lldb::ValueObjectSP
+  GetSyntheticChildAtOffset(uint32_t offset, const CompilerType &type,
+                            bool can_create,
+                            ConstString name = ConstString())  { return {}; }
+
+  virtual bool GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
+                           std::string &destination,
+                           const TypeSummaryOptions &options) { return false; }
+
+
+  virtual CompilerType                          
+  GetCompilerTypeImpl() { return {}; }
 
   // this function is assumed to always succeed and it if fails, the front-end
   // should know to deal with it in the correct way (most probably, by refusing

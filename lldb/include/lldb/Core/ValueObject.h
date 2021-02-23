@@ -506,7 +506,7 @@ public:
   bool GetSummaryAsCString(std::string &destination,
                            const TypeSummaryOptions &options);
 
-  bool GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
+  virtual bool GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
                            std::string &destination,
                            const TypeSummaryOptions &options);
 

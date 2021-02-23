@@ -29,17 +29,17 @@ class TestSwiftHashedContainerEnum(TestBase):
             'frame variable -d run -- testA',
             ordered=False,
             substrs=[
-                'key = c',
+                'key = .c',
                 'value = 1',
-                'key = b',
+                'key = .b',
                 'value = 2'])
         self.expect(
             'expr -d run -- testA',
             ordered=False,
             substrs=[
-                'key = c',
+                'key = .c',
                 'value = 1',
-                'key = b',
+                'key = .b',
                 'value = 2'])
 
         self.expect(
@@ -58,15 +58,15 @@ class TestSwiftHashedContainerEnum(TestBase):
         self.expect(
             'frame variable -d run -- testC',
             ordered=False,
-            substrs=['key = b', 'value = 2'])
+            substrs=['key = .b', 'value = 2'])
         self.expect(
             'expr -d run -- testC',
             ordered=False,
-            substrs=['key = b', 'value = 2'])
+            substrs=['key = .b', 'value = 2'])
 
         self.expect(
             'frame variable -d run -- testD',
-            substrs=['[0] = c'])
+            substrs=['[0] = .c'])
         self.expect(
             'expr -d run -- testD',
-            substrs=['[0] = c'])
+            substrs=['[0] = .c'])

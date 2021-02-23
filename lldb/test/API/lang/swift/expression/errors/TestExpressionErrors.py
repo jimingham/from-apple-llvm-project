@@ -109,7 +109,7 @@ class TestExpressionErrors(TestBase):
             "Got error %s getting enum value" %
             (enum_value.GetError().GetCString()))
         self.assertTrue(
-            enum_value.GetValue() == "ImportantError",
+            enum_value.GetSummary() == ".ImportantError",
             "Expected 'ImportantError', got %s" %
             (enum_value.GetValue()))
 
